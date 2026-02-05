@@ -11,6 +11,7 @@ import { AlertBanner } from "@/components/dashboard/AlertBanner";
 import { AIInsight } from "@/components/dashboard/AIInsight";
 import { RegenChat } from "@/components/dashboard/RegenChat";
 import { MandiConnect } from "@/components/dashboard/MandiConnect";
+import { CropRecommendation } from "@/components/dashboard/CropRecommendation";
 import { Button } from "@/components/ui/button";
 import { signOut } from "@/lib/supabase";
 
@@ -35,7 +36,22 @@ const Index = () => {
       {/* Header */}
       <header className="border-b border-border px-6 py-4">
         <div className="max-w-7xl mx-auto flex items-center justify-between">
-          <div className="flex items-center gap-4">
+          <div className="flex items-center gap-3">
+            <span className="text-2xl">🌿</span>
+            <div>
+              <h1 className="text-2xl font-bold text-gradient-emerald font-display">
+                AgroSmart
+              </h1>
+              <p className="text-sm text-muted-foreground">
+                Green Growth Edition • Intelligent Farm Management
+              </p>
+            </div>
+          </div>
+          <div className="flex items-center gap-3">
+            <Button variant="outline" className="gap-2">
+              <Clock className="w-4 h-4" />
+              Historical Logs
+            </Button>
             <Button 
               variant="ghost" 
               size="sm" 
@@ -45,19 +61,7 @@ const Index = () => {
               <LogOut className="w-4 h-4" />
               Logout
             </Button>
-            <div>
-              <h1 className="text-2xl font-bold text-gradient-emerald font-display">
-                AgroSmart Dashboard
-              </h1>
-              <p className="text-sm text-muted-foreground">
-                Intelligent Irrigation System • Monitor, Control & Optimize
-              </p>
-            </div>
           </div>
-          <Button variant="outline" className="gap-2">
-            <Clock className="w-4 h-4" />
-            Historical Logs
-          </Button>
         </div>
       </header>
 
@@ -127,6 +131,11 @@ const Index = () => {
           {/* Pump Control */}
           <div>
             <PumpControl />
+          </div>
+
+          {/* Crop Recommendation - ML Powered */}
+          <div>
+            <CropRecommendation />
           </div>
 
           {/* Leaf Doctor */}
