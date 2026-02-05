@@ -16,16 +16,24 @@ import io
 import base64
 from datetime import datetime
 
-# YOLO Integration (optional - falls back to mock if unavailable)
+# Computer Vision Integration
 try:
-    from ultralytics import YOLO
     import cv2
     import numpy as np
+    CV_AVAILABLE = True
+except ImportError:
+    CV_AVAILABLE = False
+    print("⚠️  OpenCV not installed. Using mock predictions.")
+    print("   Install with: pip install opencv-python")
+
+# YOLO Integration (optional - for custom trained models)
+try:
+    from ultralytics import YOLO
     YOLO_AVAILABLE = True
 except ImportError:
     YOLO_AVAILABLE = False
-    print("⚠️  YOLO/OpenCV not installed. Using mock predictions.")
-    print("   Install with: pip install ultralytics opencv-python")
+    print("ℹ️  YOLO not installed. Using color-based analysis.")
+    print("   Install with: pip install ultralytics")
 
 app = Flask(__name__)
 CORS(app)  # Enable CORS for frontend integration
@@ -49,6 +57,127 @@ def load_model():
             print(f"❌ Failed to load model: {e}")
     return model
 
+
+def analyze_leaf_colors(img: np.ndarray) -> dict:
+    """
+    Analyze leaf image using color-based computer vision.
+    Returns diagnosis based on detected color patterns.
+    
+    Analysis approach:
+    - Green hues (H: 35-85): Healthy chlorophyll
+    - Yellow hues (H: 15-35): Nitrogen deficiency / chlorosis  
+    - Brown/orange (H: 0-15, 165-180): Disease / necrosis
+    - Dark spots: Fungal disease indicators
+    """
+    # Convert to HSV for better color analysis
+    hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+    
+    # Convert to LAB for better brown detection
+    lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB)
+    
+    # Get image dimensions
+    height, width = img.shape[:2]
+    total_pixels = height * width
+    
+    # Define color masks in HSV
+    # Healthy green (H: 35-85, S: 40-255, V: 40-255)
+    green_lower = np.array([35, 40, 40])
+    green_upper = np.array([85, 255, 255])
+    green_mask = cv2.inRange(hsv, green_lower, green_upper)
+    
+    # Yellowing / chlorosis (H: 15-35)
+    yellow_lower = np.array([15, 40, 40])
+    yellow_upper = np.array([35, 255, 255])
+    yellow_mask = cv2.inRange(hsv, yellow_lower, yellow_upper)
+    
+    # Brown / necrosis (low saturation browns and oranges)
+    brown_lower1 = np.array([0, 30, 20])
+    brown_upper1 = np.array([20, 200, 180])
+    brown_mask1 = cv2.inRange(hsv, brown_lower1, brown_upper1)
+    
+    brown_lower2 = np.array([160, 30, 20])
+    brown_upper2 = np.array([180, 200, 180])
+    brown_mask2 = cv2.inRange(hsv, brown_lower2, brown_upper2)
+    brown_mask = cv2.bitwise_or(brown_mask1, brown_mask2)
+    
+    # Dark spots (potential fungal infection) - very low value
+    dark_lower = np.array([0, 0, 0])
+    dark_upper = np.array([180, 255, 50])
+    dark_mask = cv2.inRange(hsv, dark_lower, dark_upper)
+    
+    # Calculate percentages
+    green_percent = (cv2.countNonZero(green_mask) / total_pixels) * 100
+    yellow_percent = (cv2.countNonZero(yellow_mask) / total_pixels) * 100
+    brown_percent = (cv2.countNonZero(brown_mask) / total_pixels) * 100
+    dark_percent = (cv2.countNonZero(dark_mask) / total_pixels) * 100
+    
+    # Analyze texture for spots (using edge detection)
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    edges = cv2.Canny(gray, 50, 150)
+    edge_density = (cv2.countNonZero(edges) / total_pixels) * 100
+    
+    # Calculate color variance (diseased leaves often have irregular patterns)
+    hsv_std = np.std(hsv[:,:,0])  # Hue variance
+    
+    # Decision logic based on color analysis
+    analysis = {
+        "green_percent": round(green_percent, 1),
+        "yellow_percent": round(yellow_percent, 1),
+        "brown_percent": round(brown_percent, 1),
+        "dark_percent": round(dark_percent, 1),
+        "edge_density": round(edge_density, 1),
+        "color_variance": round(hsv_std, 1)
+    }
+    
+    # Determine diagnosis based on color ratios
+    # Check for disease indicators first (brown/dark spots)
+    if brown_percent > 12 or (dark_percent > 8 and edge_density > 6):
+        # Significant brown/dark spots = Disease
+        confidence = min(0.95, 0.70 + (brown_percent / 100) + (dark_percent / 100))
+        if brown_percent > 20:
+            diagnosis_id = "late_blight"
+        elif edge_density > 10:
+            diagnosis_id = "early_blight"  # Spots with rings
+        else:
+            diagnosis_id = "leaf_spot"
+            
+    elif yellow_percent > 18 and green_percent < 45:
+        # Significant yellowing = Deficiency
+        confidence = min(0.92, 0.65 + (yellow_percent / 100))
+        if yellow_percent > 35:
+            diagnosis_id = "severe_nitrogen_deficiency"
+        else:
+            diagnosis_id = "nitrogen_deficiency"
+            
+    elif yellow_percent > 8 and brown_percent > 4:
+        # Mixed yellowing and browning = Early disease stage
+        confidence = min(0.88, 0.60 + (yellow_percent / 200) + (brown_percent / 100))
+        diagnosis_id = "early_blight"
+        
+    elif green_percent > 45 and yellow_percent < 18 and brown_percent < 12:
+        # Predominantly green = Healthy
+        confidence = min(0.96, 0.75 + (green_percent / 200))
+        diagnosis_id = "healthy"
+        
+    elif green_percent > 25 and yellow_percent < 25:
+        # Mostly green with some yellowing = Mild stress
+        confidence = min(0.85, 0.60 + (green_percent / 200))
+        diagnosis_id = "mild_stress"
+        
+    else:
+        # Mixed signals - provide moderate confidence healthy or stress
+        if green_percent > yellow_percent:
+            diagnosis_id = "healthy"
+            confidence = 0.65
+        else:
+            diagnosis_id = "nutrient_stress"
+            confidence = 0.60
+    
+    analysis["diagnosis_id"] = diagnosis_id
+    analysis["confidence"] = round(confidence, 2)
+    
+    return analysis
+
 @app.route('/favicon.ico')
 def favicon():
     """Serve favicon to prevent 404 errors."""
@@ -56,41 +185,118 @@ def favicon():
     return '', 204
 
 # Mock AI diagnosis results - All remedies are organic/sustainable (Green Growth)
-DIAGNOSIS_RESULTS = [
-    {
+DIAGNOSIS_RESULTS = {
+    "healthy": {
         "id": "healthy",
         "status": "healthy",
         "confidence": 0.94,
         "diagnosis": "Healthy Crop",
-        "description": "Your crop is healthy and shows no signs of disease or nutrient deficiency.",
-        "remedy": "Keep soil moisture at 60%. Continue current organic practices.",
+        "description": "Your crop is healthy and shows strong chlorophyll presence with no signs of disease or nutrient deficiency.",
+        "remedy": "Keep soil moisture at 60%. Continue current organic practices. Monitor weekly for any changes.",
         "severity": "none",
         "icon": "✅",
         "color": "#22c55e"
     },
-    {
+    "mild_stress": {
+        "id": "mild_stress",
+        "status": "healthy",
+        "confidence": 0.82,
+        "diagnosis": "Mild Environmental Stress",
+        "description": "Leaf shows minor stress indicators but is generally healthy. May be due to temperature or water fluctuations.",
+        "remedy": "Ensure consistent watering schedule. Provide shade during peak heat. Apply compost mulch to regulate soil temperature.",
+        "severity": "low",
+        "icon": "✅",
+        "color": "#22c55e"
+    },
+    "nitrogen_deficiency": {
         "id": "nitrogen_deficiency",
         "status": "deficiency",
         "confidence": 0.87,
         "diagnosis": "Nitrogen Deficiency",
-        "description": "Yellowing detected in older leaves, indicating low nitrogen levels in the soil.",
-        "remedy": "Plant beans or legumes nearby to fix nitrogen naturally. Apply compost tea or well-rotted manure as organic nitrogen sources.",
+        "description": "Yellowing detected in leaves, indicating low nitrogen levels in the soil. Older leaves affected first.",
+        "remedy": "Plant beans or legumes nearby to fix nitrogen naturally. Apply compost tea or well-rotted manure as organic nitrogen sources. Consider adding blood meal or fish emulsion.",
         "severity": "moderate",
         "icon": "⚠️",
         "color": "#eab308"
     },
-    {
+    "severe_nitrogen_deficiency": {
+        "id": "severe_nitrogen_deficiency",
+        "status": "deficiency",
+        "confidence": 0.91,
+        "diagnosis": "Severe Nitrogen Deficiency",
+        "description": "Significant yellowing and chlorosis detected. Leaves show advanced nitrogen starvation symptoms.",
+        "remedy": "Immediate application of organic nitrogen: fish emulsion (1 tbsp/gallon) or blood meal. Add compost heavily. Consider cover crop rotation with legumes next season.",
+        "severity": "high",
+        "icon": "🔴",
+        "color": "#ef4444"
+    },
+    "nutrient_stress": {
+        "id": "nutrient_stress",
+        "status": "deficiency",
+        "confidence": 0.75,
+        "diagnosis": "General Nutrient Stress",
+        "description": "Leaf coloration suggests possible nutrient imbalance. Could be multiple micronutrient deficiencies.",
+        "remedy": "Apply balanced organic fertilizer. Test soil pH (ideal: 6.0-7.0). Add compost and consider foliar feeding with seaweed extract.",
+        "severity": "moderate",
+        "icon": "⚠️",
+        "color": "#eab308"
+    },
+    "early_blight": {
         "id": "early_blight",
         "status": "disease",
         "confidence": 0.91,
         "diagnosis": "Early Blight (Alternaria solani)",
-        "description": "Fungal spots detected with characteristic concentric rings on leaves.",
-        "remedy": "Apply Neem oil spray (2-3 tbsp per gallon of water). Improve air circulation by proper spacing. Remove affected leaves and practice crop rotation.",
+        "description": "Fungal spots detected with characteristic patterns on leaves. Common in tomatoes and potatoes.",
+        "remedy": "Apply Neem oil spray (2-3 tbsp per gallon of water). Improve air circulation by proper spacing. Remove affected leaves immediately and practice crop rotation. Apply copper-based organic fungicide if severe.",
         "severity": "high",
         "icon": "🔴",
         "color": "#ef4444"
+    },
+    "late_blight": {
+        "id": "late_blight",
+        "status": "disease",
+        "confidence": 0.89,
+        "diagnosis": "Late Blight (Phytophthora infestans)",
+        "description": "Severe fungal infection detected. Brown lesions with possible white fungal growth. Spreads rapidly in humid conditions.",
+        "remedy": "Remove and destroy all affected plant material immediately. Apply copper hydroxide organic fungicide. Improve drainage and air circulation. Do not compost infected material. Practice 3-year crop rotation.",
+        "severity": "critical",
+        "icon": "🔴",
+        "color": "#dc2626"
+    },
+    "leaf_spot": {
+        "id": "leaf_spot",
+        "status": "disease",
+        "confidence": 0.85,
+        "diagnosis": "Bacterial/Fungal Leaf Spot",
+        "description": "Dark spots detected on leaf surface indicating bacterial or fungal infection. Multiple pathogens can cause similar symptoms.",
+        "remedy": "Apply baking soda solution (1 tbsp + 1/2 tsp liquid soap per gallon). Remove affected leaves. Avoid overhead watering. Apply neem oil preventively. Ensure good air circulation.",
+        "severity": "moderate",
+        "icon": "⚠️",
+        "color": "#f97316"
+    },
+    "powdery_mildew": {
+        "id": "powdery_mildew",
+        "status": "disease",
+        "confidence": 0.88,
+        "diagnosis": "Powdery Mildew",
+        "description": "White powdery coating detected on leaf surface. Common fungal disease in humid conditions.",
+        "remedy": "Spray milk solution (40% milk, 60% water). Apply neem oil. Improve air circulation. Remove severely affected leaves. Apply sulfur-based organic fungicide for persistent cases.",
+        "severity": "moderate",
+        "icon": "⚠️",
+        "color": "#eab308"
+    },
+    "rust": {
+        "id": "rust",
+        "status": "disease",
+        "confidence": 0.86,
+        "diagnosis": "Rust Fungus",
+        "description": "Orange/brown rust pustules detected on leaves. Fungal spores spread by wind and water splash.",
+        "remedy": "Remove and destroy infected leaves. Apply sulfur-based organic fungicide. Avoid wetting foliage when watering. Increase plant spacing for better airflow. Consider resistant varieties.",
+        "severity": "moderate",
+        "icon": "⚠️",
+        "color": "#f97316"
     }
-]
+}
 
 ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'webp', 'gif'}
 
@@ -108,29 +314,29 @@ def map_yolo_to_diagnosis(class_name: str, confidence: float) -> dict:
     # Mapping for common plant disease datasets (e.g., PlantVillage)
     disease_mapping = {
         # Healthy classes
-        "healthy": DIAGNOSIS_RESULTS[0],
-        "Healthy": DIAGNOSIS_RESULTS[0],
+        "healthy": "healthy",
+        "Healthy": "healthy",
         # Deficiency classes
-        "nitrogen_deficiency": DIAGNOSIS_RESULTS[1],
-        "nutrient_deficiency": DIAGNOSIS_RESULTS[1],
+        "nitrogen_deficiency": "nitrogen_deficiency",
+        "nutrient_deficiency": "nutrient_stress",
         # Disease classes
-        "early_blight": DIAGNOSIS_RESULTS[2],
-        "late_blight": DIAGNOSIS_RESULTS[2],
-        "leaf_spot": DIAGNOSIS_RESULTS[2],
-        "rust": DIAGNOSIS_RESULTS[2],
-        "powdery_mildew": DIAGNOSIS_RESULTS[2],
+        "early_blight": "early_blight",
+        "late_blight": "late_blight",
+        "leaf_spot": "leaf_spot",
+        "rust": "rust",
+        "powdery_mildew": "powdery_mildew",
     }
     
     # Check if class name matches any known diagnosis
-    for key, diagnosis in disease_mapping.items():
+    for key, diagnosis_id in disease_mapping.items():
         if key.lower() in class_name.lower():
-            # Update confidence from actual detection
-            result = diagnosis.copy()
+            # Get diagnosis and update confidence from actual detection
+            result = DIAGNOSIS_RESULTS[diagnosis_id].copy()
             result["confidence"] = round(confidence, 2)
             return result
     
     # Default: If using standard YOLO model (not trained on plants),
-    # return healthy with note
+    # return info message
     return {
         "id": "unknown_detection",
         "status": "info",
@@ -193,41 +399,65 @@ def scan_image():
     image_data = file.read()
     processing_start = time.time()
     
-    # Try YOLO prediction first, fall back to mock
-    if YOLO_AVAILABLE:
+    diagnosis = None
+    analysis_method = "unknown"
+    color_analysis = None
+    
+    # Priority 1: Use color-based analysis (works for actual leaf images)
+    if CV_AVAILABLE:
+        try:
+            # Convert image bytes to numpy array
+            nparr = np.frombuffer(image_data, np.uint8)
+            img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+            
+            if img is not None:
+                # Run color-based leaf analysis
+                color_analysis = analyze_leaf_colors(img)
+                diagnosis_id = color_analysis["diagnosis_id"]
+                
+                # Get the diagnosis template and update with analysis confidence
+                diagnosis = DIAGNOSIS_RESULTS[diagnosis_id].copy()
+                diagnosis["confidence"] = color_analysis["confidence"]
+                analysis_method = "color_analysis"
+                
+                print(f"📊 Color Analysis: green={color_analysis['green_percent']}%, "
+                      f"yellow={color_analysis['yellow_percent']}%, "
+                      f"brown={color_analysis['brown_percent']}% -> {diagnosis_id}")
+        except Exception as e:
+            print(f"Color analysis error: {e}")
+            diagnosis = None
+    
+    # Priority 2: Try YOLO if color analysis failed and model is trained on plants
+    if diagnosis is None and YOLO_AVAILABLE:
         yolo_model = load_model()
-        if yolo_model:
+        # Only use YOLO if it's a custom trained plant disease model
+        is_plant_model = "best.pt" in MODEL_PATH or "plant" in MODEL_PATH.lower() or "disease" in MODEL_PATH.lower()
+        
+        if yolo_model and is_plant_model:
             try:
-                # Convert image bytes to numpy array
                 nparr = np.frombuffer(image_data, np.uint8)
                 img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
                 
-                # Run inference
                 results = yolo_model(img, verbose=False, conf=0.5)
                 
-                # Process results
                 if len(results[0].boxes) > 0:
-                    # Get the highest confidence detection
                     boxes = results[0].boxes
                     best_idx = boxes.conf.argmax().item()
                     confidence = float(boxes.conf[best_idx])
                     class_id = int(boxes.cls[best_idx])
                     class_name = results[0].names[class_id]
                     
-                    # Map YOLO class to diagnosis (customize based on your model)
                     diagnosis = map_yolo_to_diagnosis(class_name, confidence)
-                else:
-                    # No detection = healthy
-                    diagnosis = DIAGNOSIS_RESULTS[0]  # Healthy
+                    analysis_method = "yolo_plant_model"
             except Exception as e:
                 print(f"YOLO prediction error: {e}")
-                diagnosis = random.choice(DIAGNOSIS_RESULTS)
-        else:
-            diagnosis = random.choice(DIAGNOSIS_RESULTS)
-    else:
-        # Mock AI: Randomly select a diagnosis result
-        time.sleep(1.5)  # Simulate processing
-        diagnosis = random.choice(DIAGNOSIS_RESULTS)
+    
+    # Priority 3: Fallback to healthy with low confidence if all else fails
+    if diagnosis is None:
+        diagnosis = DIAGNOSIS_RESULTS["healthy"].copy()
+        diagnosis["confidence"] = 0.50
+        diagnosis["description"] += " (Limited analysis - OpenCV required for accurate detection)"
+        analysis_method = "fallback"
     
     processing_time = int((time.time() - processing_start) * 1000)
     
@@ -249,12 +479,22 @@ def scan_image():
             "color": diagnosis["color"]
         },
         "metadata": {
-            "model_version": f"yolo-{MODEL_PATH}" if YOLO_AVAILABLE else "mock-v1.0",
+            "analysis_method": analysis_method,
             "processing_time_ms": processing_time,
             "green_growth_certified": True,
-            "yolo_enabled": YOLO_AVAILABLE
+            "cv_available": CV_AVAILABLE,
+            "yolo_available": YOLO_AVAILABLE
         }
     }
+    
+    # Include color analysis breakdown for transparency
+    if color_analysis:
+        response["metadata"]["color_analysis"] = {
+            "green_percent": color_analysis["green_percent"],
+            "yellow_percent": color_analysis["yellow_percent"],
+            "brown_percent": color_analysis["brown_percent"],
+            "dark_spots_percent": color_analysis["dark_percent"]
+        }
     
     return jsonify(response), 200
 
@@ -264,7 +504,7 @@ def get_all_diagnoses():
     """Return all possible diagnoses (for reference/testing)."""
     return jsonify({
         "success": True,
-        "diagnoses": DIAGNOSIS_RESULTS,
+        "diagnoses": list(DIAGNOSIS_RESULTS.values()),
         "note": "All remedies are organic and sustainable (Green Growth certified)"
     })
 
@@ -274,17 +514,20 @@ def system_info():
     """Return system capabilities and model info."""
     return jsonify({
         "success": True,
+        "cv_available": CV_AVAILABLE,
         "yolo_available": YOLO_AVAILABLE,
         "model_path": MODEL_PATH if YOLO_AVAILABLE else None,
         "model_loaded": model is not None,
         "capabilities": {
             "image_scan": True,
-            "realtime_detection": YOLO_AVAILABLE,
-            "mock_fallback": True
+            "color_analysis": CV_AVAILABLE,
+            "realtime_detection": CV_AVAILABLE,
+            "yolo_plant_model": YOLO_AVAILABLE
         },
+        "analysis_method": "color_analysis" if CV_AVAILABLE else "fallback",
         "instructions": {
-            "custom_model": "Set YOLO_MODEL_PATH environment variable to your trained model",
-            "install_yolo": "pip install ultralytics opencv-python"
+            "for_best_results": "Upload clear leaf images against contrasting background",
+            "custom_model": "Set YOLO_MODEL_PATH environment variable to your trained plant disease model"
         }
     })
 
