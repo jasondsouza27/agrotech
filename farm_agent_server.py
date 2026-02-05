@@ -1268,6 +1268,52 @@ DIAGNOSIS_TEMPLATES = {
 }
 
 
+def is_leaf_image(img, mode="upload"):
+    """
+    Strict leaf validation. Requires dominant green presence and leaf-like texture.
+    Rejects non-leaf objects like skin, walls, furniture, etc.
+    """
+    hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+    total_pixels = img.shape[0] * img.shape[1]
+    
+    # Strict green detection (core leaf color)
+    green_mask = cv2.inRange(hsv, np.array([30, 30, 30]), np.array([85, 255, 255]))
+    # Yellow-green (stressed/aging leaves)
+    yellow_mask = cv2.inRange(hsv, np.array([18, 40, 40]), np.array([30, 255, 255]))
+    # Brown (dried/diseased leaves - tighter to avoid skin/wood)
+    brown_mask = cv2.inRange(hsv, np.array([5, 50, 30]), np.array([18, 200, 180]))
+    
+    green_pct = (cv2.countNonZero(green_mask) / total_pixels) * 100
+    yellow_pct = (cv2.countNonZero(yellow_mask) / total_pixels) * 100
+    brown_pct = (cv2.countNonZero(brown_mask) / total_pixels) * 100
+    plant_pct = green_pct + yellow_pct + brown_pct
+    
+    # Green must be the dominant plant color (at least some green present)
+    # This prevents skin/wood/furniture from passing via brown alone
+    has_green = green_pct >= 5
+    
+    # Overall plant coverage thresholds
+    if mode == "webcam":
+        threshold = 50  # Leaf should dominate the cropped center
+    else:
+        threshold = 30  # Upload: leaf should be main subject
+    
+    is_leaf = plant_pct >= threshold and has_green
+    
+    if not is_leaf:
+        if not has_green:
+            reason = "No green leaf detected. Please capture an actual leaf."
+        else:
+            reason = "Leaf too small or far away. Fill the guide box with the leaf."
+    else:
+        reason = ""
+    
+    print(f"🔍 Leaf check ({mode}): green={green_pct:.1f}%, yellow={yellow_pct:.1f}%, "
+          f"brown={brown_pct:.1f}%, total={plant_pct:.1f}%, has_green={has_green} -> {'✅' if is_leaf else '❌'}")
+    
+    return is_leaf, reason, {"plant_pct": round(plant_pct, 1), "green_pct": round(green_pct, 1)}
+
+
 def analyze_leaf_colors(img):
     """
     Analyze leaf image using color-based computer vision.
@@ -1349,6 +1395,16 @@ def scan_image():
             img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
             
             if img is not None:
+                # Validate it's actually a leaf
+                is_leaf, reject_reason, detection_info = is_leaf_image(img, mode="upload")
+                if not is_leaf:
+                    return jsonify({
+                        "success": False,
+                        "error": "not_a_leaf",
+                        "message": reject_reason,
+                        "detection": detection_info
+                    }), 400
+                
                 # Run color analysis
                 diagnosis_id, confidence = analyze_leaf_colors(img)
                 diagnosis = DIAGNOSIS_TEMPLATES[diagnosis_id].copy()
@@ -1386,6 +1442,99 @@ def scan_image():
             "success": False,
             "error": f"Image analysis failed: {str(e)}",
             "message": "Please try again or contact support"
+        }), 500
+
+
+@app.route("/api/scan/frame", methods=["POST"])
+def scan_frame():
+    """
+    POST /api/scan/frame
+    Analyze a webcam frame (base64 encoded) for leaf disease detection.
+    
+    Expected JSON payload:
+    {
+        "frame": "data:image/jpeg;base64,..."
+    }
+    """
+    try:
+        if not request.is_json:
+            return jsonify({
+                "success": False,
+                "error": "Content-Type must be application/json"
+            }), 400
+        
+        data = request.get_json()
+        frame_data = data.get("frame", "")
+        
+        if not frame_data:
+            return jsonify({
+                "success": False,
+                "error": "No frame data provided"
+            }), 400
+        
+        processing_start = time.time()
+        
+        # Decode base64 image
+        # Remove data URL prefix if present (e.g., "data:image/jpeg;base64,")
+        if "," in frame_data:
+            frame_data = frame_data.split(",", 1)[1]
+        
+        import base64
+        image_bytes = base64.b64decode(frame_data)
+        
+        if CV_AVAILABLE:
+            nparr = np.frombuffer(image_bytes, np.uint8)
+            img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+            
+            if img is not None:
+                # Crop to center of frame FIRST — focus on the leaf area
+                h, w = img.shape[:2]
+                crop_img = img[int(h*0.2):int(h*0.8), int(w*0.25):int(w*0.75)]
+                
+                # Validate the CROPPED region (stricter — leaf should fill the guide box)
+                is_leaf, reject_reason, detection_info = is_leaf_image(crop_img, mode="webcam")
+                if not is_leaf:
+                    return jsonify({
+                        "success": False,
+                        "error": "not_a_leaf",
+                        "message": reject_reason,
+                        "detection": detection_info
+                    }), 400
+                
+                diagnosis_id, confidence = analyze_leaf_colors(crop_img)
+                diagnosis = DIAGNOSIS_TEMPLATES[diagnosis_id].copy()
+                diagnosis["confidence"] = round(confidence, 2)
+                analysis_method = "color_analysis"
+            else:
+                diagnosis = DIAGNOSIS_TEMPLATES["healthy"].copy()
+                diagnosis["confidence"] = 0.50
+                analysis_method = "fallback"
+        else:
+            diagnosis = DIAGNOSIS_TEMPLATES["healthy"].copy()
+            diagnosis["confidence"] = 0.50
+            diagnosis["description"] += " (Limited analysis - OpenCV not available)"
+            analysis_method = "fallback"
+        
+        processing_time = int((time.time() - processing_start) * 1000)
+        
+        return jsonify({
+            "success": True,
+            "timestamp": datetime.now().isoformat(),
+            "scan_id": f"LIVE-{random.randint(10000, 99999)}",
+            "result": diagnosis,
+            "metadata": {
+                "analysis_method": analysis_method,
+                "processing_time_ms": processing_time,
+                "mode": "realtime",
+                "cv_available": CV_AVAILABLE
+            }
+        }), 200
+    
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "error": f"Frame analysis failed: {str(e)}",
+            "message": "Please try again"
         }), 500
 
 
