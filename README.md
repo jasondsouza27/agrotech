@@ -1,41 +1,73 @@
-# AgroSmart - Leaf Doctor Module 🌿
+# AgroTech - Leaf Disease Detection System 🌿
 
-> AI-powered crop disease detection with organic remedies
+> AI-powered crop disease detection with YOLO + organic remedies
 
 ## Overview
 
-The **Leaf Doctor** module provides farmers with an intelligent scanning system to detect crop diseases and nutrient deficiencies. All recommended remedies are **100% organic and sustainable** (Green Growth certified).
+Complete agricultural disease detection system with:
+- **Backend API**: Flask server with YOLO integration
+- **Real-time Detection**: Webcam-based live monitoring
+- **Web Interface**: Drag-and-drop image upload
+- **React Dashboard**: Full-featured AgroGuardian frontend
 
-## Backend API
+All recommended remedies are **100% organic and sustainable** (Green Growth certified).
 
-### Quick Start
+## 🚀 Quick Start (Easiest Way)
+
+**Double-click** `run_project.bat` to start everything automatically!
+
+Or manually:
 
 ```bash
-# Install dependencies
-pip install flask flask-cors
-
-# Run the server
+# 1. Start Backend
 python prediction_server.py
+
+# 2. Open test_api.html in your browser
+# Drag & drop leaf images to test
 ```
 
-The server will start at `http://localhost:5000`
+## 📋 Installation
 
-### API Endpoints
+```bash
+# Required dependencies
+pip install flask flask-cors ultralytics opencv-python
 
-#### Health Check
+# Optional: For full React frontend
+# Install Node.js from https://nodejs.org/ then:
+cd frontend
+npm install
+npm run dev
+```
+
+
+## 🔧 Project Structure
+
+```
+agrotech/
+├── prediction_server.py      # Flask API with YOLO integration
+├── real_time_detection.py    # Webcam real-time detection
+├── test_api.html             # Simple web interface (no Node.js needed)
+├── run_project.bat           # One-click launcher
+├── yolov8n.pt                # YOLO model weights
+└── frontend/                 # React dashboard (requires Node.js)
+    └── src/components/dashboard/LeafDoctor.tsx
+```
+
+## 📡 API Endpoints
+
+### Health Check
 ```
 GET /api/health
 ```
 
-#### Scan Crop Image
+### Scan Crop Image
 ```
 POST /api/scan/image
 Content-Type: multipart/form-data
-
 Body: image (file)
 ```
 
-**Response Example:**
+**Response:**
 ```json
 {
   "success": true,
@@ -43,27 +75,81 @@ Body: image (file)
   "result": {
     "diagnosis": "Nitrogen Deficiency",
     "description": "Yellowing detected in older leaves...",
-    "remedy": "Plant beans or legumes nearby to fix nitrogen naturally...",
+    "remedy": "Plant beans or legumes nearby...",
     "severity": "moderate",
     "confidence": 0.87
   }
 }
 ```
 
-### Possible Diagnoses
+### System Info
+```
+GET /api/system/info
+```
 
-| Condition | Severity | Organic Remedy |
-|-----------|----------|----------------|
-| ✅ Healthy | None | Maintain 60% soil moisture |
-| ⚠️ Nitrogen Deficiency | Moderate | Plant legumes, apply compost tea |
-| 🔴 Early Blight | High | Neem oil spray, improve air circulation |
+### List All Diagnoses
+```
+GET /api/scan/diagnoses
+```
 
-## Tech Stack
+## 🎥 Real-Time Detection
 
-- **Backend**: Flask (Python)
-- **AI Model**: Mock implementation (TensorFlow integration pending)
-- **Philosophy**: Green Growth - Sustainable & Organic remedies only
+For webcam-based continuous monitoring:
+
+```bash
+python real_time_detection.py
+```
+
+Press `q` to quit.
+
+## 🧪 Custom YOLO Model
+
+To use your own trained model:
+
+```bash
+# Option 1: Environment variable
+set YOLO_MODEL_PATH=path/to/your/best.pt
+python prediction_server.py
+
+# Option 2: Edit MODEL_PATH in prediction_server.py (line 34)
+MODEL_PATH = 'path/to/your/best.pt'
+```
+
+## 🌐 Frontend Options
+
+### Option 1: Simple Web Interface (No Installation)
+- Open `test_api.html` in any browser
+- Drag & drop images
+- Works immediately
+
+### Option 2: Full React Dashboard
+- Requires Node.js
+- Professional UI with charts, alerts, metrics
+- Run: `cd frontend && npm install && npm run dev`
+
+## 🔮 Detected Conditions
+
+- ✅ Healthy crops
+- ⚠️ Nitrogen deficiency
+- 🔴 Early blight (fungal)
+- 🔴 Late blight
+- 🔴 Leaf spot
+- 🔴 Rust
+- 🔴 Powdery mildew
+
+## 🌱 Green Growth Certified
+
+All remedies are organic and sustainable:
+- Neem oil sprays
+- Companion planting
+- Compost tea
+- Natural nitrogen fixation
+- Crop rotation
+
+## 📝 License
+
+MIT License - Free for agricultural use
 
 ---
 
-*Built for AgroSmart Hackathon 2026*
+**Built with ❤️ for sustainable agriculture**

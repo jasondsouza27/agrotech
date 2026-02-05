@@ -1,0 +1,238 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* AgroSmart Dark Design System
+   Deep emerald greens, clean dark theme
+    All colors in HSL */
+
+ @layer base {
+   :root {
+     /* Core Solarpunk Palette */
+     --background: 160 30% 5%;
+     --foreground: 150 20% 95%;
+ 
+     /* Card with glassmorphism base */
+     --card: 160 40% 8%;
+     --card-foreground: 150 20% 95%;
+ 
+     --popover: 160 35% 10%;
+     --popover-foreground: 150 20% 95%;
+ 
+     /* Primary - Deep Emerald */
+     --primary: 160 84% 18%;
+     --primary-foreground: 150 20% 98%;
+ 
+     /* Secondary - Slate */
+     --secondary: 160 15% 15%;
+     --secondary-foreground: 150 20% 90%;
+ 
+     /* Muted - Dark Slate */
+     --muted: 160 20% 12%;
+     --muted-foreground: 160 10% 55%;
+ 
+     /* Accent - Neon Green */
+     --accent: 142 76% 55%;
+     --accent-foreground: 160 30% 5%;
+ 
+     /* Status Colors */
+     --destructive: 0 72% 51%;
+     --destructive-foreground: 0 0% 100%;
+ 
+     /* Borders & Inputs */
+     --border: 160 25% 18%;
+     --input: 160 25% 15%;
+     --ring: 142 76% 45%;
+ 
+     --radius: 0.75rem;
+ 
+     /* Extended Palette */
+     --emerald-deep: 160 84% 18%;
+     --emerald-glow: 160 76% 36%;
+     --neon-green: 142 76% 55%;
+     --neon-green-muted: 142 50% 35%;
+     --slate-dark: 160 15% 8%;
+     --slate-medium: 160 12% 20%;
+     
+     /* Status Semantic */
+     --status-good: 142 70% 45%;
+     --status-warning: 38 92% 50%;
+     --status-danger: 0 72% 51%;
+     --status-info: 199 89% 48%;
+     
+     /* Chart Colors */
+     --chart-moisture: 199 89% 48%;
+     --chart-temperature: 25 95% 53%;
+     --chart-humidity: 142 70% 45%;
+     
+    /* Card styling */
+    --card-bg: 160 30% 8%;
+    --card-border: 160 20% 18%;
+ 
+     /* Sidebar */
+     --sidebar-background: 160 30% 6%;
+     --sidebar-foreground: 150 20% 90%;
+     --sidebar-primary: 160 84% 18%;
+     --sidebar-primary-foreground: 150 20% 98%;
+     --sidebar-accent: 160 25% 12%;
+     --sidebar-accent-foreground: 150 20% 95%;
+     --sidebar-border: 160 25% 15%;
+     --sidebar-ring: 142 76% 45%;
+   }
+ }
+ 
+ @layer base {
+   * {
+     @apply border-border;
+   }
+ 
+   html {
+     font-family: 'Inter', system-ui, sans-serif;
+   }
+ 
+   body {
+     @apply bg-background text-foreground antialiased;
+     font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+   }
+ 
+   h1, h2, h3, h4, h5, h6 {
+     font-family: 'Space Grotesk', 'Inter', sans-serif;
+   }
+ }
+ 
+ @layer components {
+  /* Dashboard Card - Clean Style */
+  .dashboard-card {
+    @apply rounded-xl;
+    background: hsl(var(--card-bg));
+    border: 1px solid hsl(var(--card-border));
+   }
+ 
+  /* Legacy glass-card support */
+  .glass-card {
+    @apply rounded-xl;
+    background: hsl(var(--card-bg));
+    border: 1px solid hsl(var(--card-border));
+   }
+ 
+   /* Neon Glow Effects */
+   .neon-glow {
+    box-shadow: 0 0 12px hsl(142 76% 55% / 0.2);
+   }
+ 
+   .neon-text {
+    text-shadow: 0 0 10px hsl(142 76% 55% / 0.4);
+   }
+ 
+   /* Status Badges */
+   .status-good {
+     @apply px-2.5 py-0.5 rounded-full text-xs font-medium;
+     background: hsl(var(--status-good) / 0.2);
+     color: hsl(var(--status-good));
+     border: 1px solid hsl(var(--status-good) / 0.3);
+   }
+ 
+   .status-warning {
+     @apply px-2.5 py-0.5 rounded-full text-xs font-medium;
+     background: hsl(var(--status-warning) / 0.2);
+     color: hsl(var(--status-warning));
+     border: 1px solid hsl(var(--status-warning) / 0.3);
+   }
+ 
+   .status-danger {
+     @apply px-2.5 py-0.5 rounded-full text-xs font-medium;
+     background: hsl(var(--status-danger) / 0.2);
+     color: hsl(var(--status-danger));
+     border: 1px solid hsl(var(--status-danger) / 0.3);
+   }
+ 
+   /* Bento Grid */
+   .bento-grid {
+     @apply grid gap-4;
+     grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+   }
+ 
+   @media (min-width: 1024px) {
+     .bento-grid {
+       grid-template-columns: repeat(4, 1fr);
+     }
+   }
+ 
+   /* Chart Container */
+   .chart-container {
+     @apply w-full;
+   }
+ 
+   .chart-container .recharts-cartesian-grid-horizontal line,
+   .chart-container .recharts-cartesian-grid-vertical line {
+     stroke: hsl(160 25% 18%);
+   }
+ 
+   .chart-container .recharts-text {
+     fill: hsl(160 10% 55%);
+     font-size: 11px;
+   }
+ 
+  /* Floating Chat Button - Simplified */
+  .chat-float {
+    @apply fixed bottom-6 right-6 z-50;
+   }
+ 
+   /* Alert Banner */
+   .alert-banner {
+     @apply w-full py-3 px-4 flex items-center gap-3;
+     background: linear-gradient(90deg, hsl(0 72% 51% / 0.2), hsl(0 72% 51% / 0.1));
+     border-bottom: 1px solid hsl(0 72% 51% / 0.3);
+   }
+ 
+   /* Metric Value */
+   .metric-value {
+     @apply text-3xl font-bold tracking-tight;
+     font-family: 'Space Grotesk', sans-serif;
+   }
+ 
+   /* Progress Bar */
+   .progress-bar {
+    @apply h-2.5 rounded-full overflow-hidden;
+     background: hsl(160 25% 15%);
+   }
+ 
+   .progress-bar-fill {
+     @apply h-full rounded-full transition-all duration-500;
+    background: hsl(var(--accent));
+   }
+ 
+   /* AI Insight Section */
+   .ai-insight {
+    @apply rounded-xl p-4;
+    background: hsl(var(--card-bg));
+    border: 1px solid hsl(var(--card-border));
+   }
+ }
+ 
+ @layer utilities {
+   .text-gradient-emerald {
+     @apply bg-clip-text text-transparent;
+    background-image: linear-gradient(135deg, hsl(142 70% 45%), hsl(142 76% 55%));
+   }
+ 
+   .scrollbar-thin {
+     scrollbar-width: thin;
+     scrollbar-color: hsl(160 25% 20%) transparent;
+   }
+ 
+   .scrollbar-thin::-webkit-scrollbar {
+     width: 6px;
+   }
+ 
+   .scrollbar-thin::-webkit-scrollbar-track {
+     background: transparent;
+   }
+ 
+   .scrollbar-thin::-webkit-scrollbar-thumb {
+     background: hsl(160 25% 20%);
+     border-radius: 3px;
+   }
+ }
