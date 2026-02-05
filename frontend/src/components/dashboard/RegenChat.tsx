@@ -1,56 +1,94 @@
  import { useState } from "react";
- import { MessageCircle, Send, X, Leaf } from "lucide-react";
- import { Button } from "@/components/ui/button";
- import { Input } from "@/components/ui/input";
- 
- interface Message {
-   id: string;
-   role: "user" | "assistant";
-   content: string;
- }
- 
- export function RegenChat() {
-   const [isOpen, setIsOpen] = useState(false);
-   const [input, setInput] = useState("");
-   const [messages, setMessages] = useState<Message[]>([
-     {
-       id: "1",
-       role: "assistant",
-       content: "Hello! I'm Regen, your AI farming assistant. I have access to your live sensor data. How can I help you today?",
-     },
-   ]);
- 
-   const handleSend = () => {
-     if (!input.trim()) return;
-     
-     const userMessage: Message = {
-       id: Date.now().toString(),
-       role: "user",
-       content: input,
-     };
-     
-     setMessages(prev => [...prev, userMessage]);
-     setInput("");
-     
-     // Simulate AI response
-     setTimeout(() => {
-       const responses = [
-         "Based on your current soil moisture at 52% and the warm temperature of 28°C, I'd recommend delaying irrigation until evening when evaporation rates are lower.",
-         "Your sensors show optimal conditions. The humidity at 66% combined with good soil pH of 6.8 indicates healthy growing conditions for most crops.",
-         "I notice your pump has been paused for efficiency. The AI auto-control is helping you save approximately 20 liters per hour during peak heat.",
-       ];
-       
-       const assistantMessage: Message = {
-         id: (Date.now() + 1).toString(),
-         role: "assistant",
-         content: responses[Math.floor(Math.random() * responses.length)],
-       };
-       
-       setMessages(prev => [...prev, assistantMessage]);
-     }, 1000);
-   };
- 
-   return (
+import { MessageCircle, Send, X, Leaf, Loader2 } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+
+interface Message {
+  id: string;
+  role: "user" | "assistant";
+  content: string;
+}
+
+const API_URL = "http://127.0.0.1:5000";
+
+export function RegenChat() {
+  const [isOpen, setIsOpen] = useState(false);
+  const [input, setInput] = useState("");
+  const [isLoading, setIsLoading] = useState(false);
+  const [messages, setMessages] = useState<Message[]>([
+    {
+      id: "1",
+      role: "assistant",
+      content: "Hello! I'm Regen, your AI farming assistant powered by Llama 3.1. I have access to your live sensor data. How can I help you today?",
+    },
+  ]);
+
+  const handleSend = async () => {
+    if (!input.trim() || isLoading) return;
+    
+    const userMessage: Message = {
+      id: Date.now().toString(),
+      role: "user",
+      content: input,
+    };
+    
+    setMessages(prev => [...prev, userMessage]);
+    setInput("");
+    setIsLoading(true);
+    
+    try {
+      // Get conversation history (exclude initial greeting)
+      const history = messages.slice(1).map(m => ({
+        role: m.role,
+        content: m.content
+      }));
+      
+      // Mock sensor data - in production, get from actual sensors
+      const sensorData = {
+        soil_moisture: 52,
+        temperature: 28,
+        humidity: 66,
+        soil_ph: 6.8,
+        nitrogen: 45,
+        phosphorus: 38,
+        potassium: 42
+      };
+      
+      const response = await fetch(`${API_URL}/api/llm/chat`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          message: input,
+          history: history,
+          sensor_data: sensorData
+        }),
+      });
+      
+      const data = await response.json();
+      
+      const assistantMessage: Message = {
+        id: (Date.now() + 1).toString(),
+        role: "assistant",
+        content: data.response || "I couldn't process that. Please try again.",
+      };
+      
+      setMessages(prev => [...prev, assistantMessage]);
+    } catch (error) {
+      console.error("Chat error:", error);
+      const errorMessage: Message = {
+        id: (Date.now() + 1).toString(),
+        role: "assistant",
+        content: "I'm having trouble connecting. Please make sure LM Studio is running with the Llama 3.1 model loaded.",
+      };
+      setMessages(prev => [...prev, errorMessage]);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  return (
      <>
        {/* Floating Button */}
        <button
@@ -109,24 +147,34 @@
                  </div>
                </div>
              ))}
+             {isLoading && (
+               <div className="flex justify-start">
+                 <div className="bg-secondary/70 text-foreground border border-border p-3 rounded-xl text-sm flex items-center gap-2">
+                   <Loader2 className="w-4 h-4 animate-spin" />
+                   Thinking...
+                 </div>
+               </div>
+             )}
            </div>
- 
+
            {/* Input */}
            <div className="p-4 border-t border-border">
              <div className="flex gap-2">
                <Input
                  value={input}
                  onChange={(e) => setInput(e.target.value)}
-                 onKeyDown={(e) => e.key === "Enter" && handleSend()}
+                 onKeyDown={(e) => e.key === "Enter" && !isLoading && handleSend()}
                  placeholder="Ask about your crops..."
                  className="flex-1 bg-secondary/50 border-border"
+                 disabled={isLoading}
                />
                <Button
                  size="icon"
                  onClick={handleSend}
-                className="bg-primary hover:bg-primary/90"
+                 disabled={isLoading}
+                 className="bg-primary hover:bg-primary/90"
                >
-                 <Send className="w-4 h-4" />
+                 {isLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
                </Button>
              </div>
            </div>

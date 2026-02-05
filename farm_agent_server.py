@@ -1765,6 +1765,114 @@ def index():
     }), 200
 
 
+# =============================================================================
+# LLM CHAT - LM Studio Integration
+# =============================================================================
+
+LM_STUDIO_URL = "http://127.0.0.1:1234/v1/chat/completions"
+
+@app.route("/api/llm/chat", methods=["POST"])
+def llm_chat():
+    """
+    POST /api/llm/chat
+    Proxy to LM Studio for AI chat functionality.
+    
+    Expected JSON payload:
+    {
+        "message": "User's question",
+        "history": [{"role": "user"|"assistant", "content": "..."}],
+        "sensor_data": {optional sensor context}
+    }
+    """
+    try:
+        if not request.is_json:
+            return jsonify({"error": "Content-Type must be application/json"}), 400
+        
+        data = request.get_json()
+        user_message = data.get("message", "")
+        history = data.get("history", [])
+        sensor_data = data.get("sensor_data", {})
+        
+        if not user_message:
+            return jsonify({"error": "Message is required"}), 400
+        
+        # Build context with sensor data if provided
+        system_prompt = """You are Regen, an AI farming assistant for AgroSmart. You help farmers with:
+- Crop management and disease identification
+- Irrigation scheduling and water conservation
+- Soil health and regenerative agriculture practices
+- Market prices and selling recommendations
+- Weather-based farming decisions
+
+Be concise, practical, and farmer-friendly. Use simple language."""
+        
+        if sensor_data:
+            system_prompt += f"""\n\nCurrent sensor readings from the farm:
+- Soil Moisture: {sensor_data.get('soil_moisture', 'N/A')}%
+- Temperature: {sensor_data.get('temperature', 'N/A')}°C
+- Humidity: {sensor_data.get('humidity', 'N/A')}%
+- Soil pH: {sensor_data.get('soil_ph', 'N/A')}
+- Nitrogen (N): {sensor_data.get('nitrogen', 'N/A')}
+- Phosphorus (P): {sensor_data.get('phosphorus', 'N/A')}
+- Potassium (K): {sensor_data.get('potassium', 'N/A')}
+
+Use this live data to give specific, actionable advice."""
+        
+        # Build messages array for LM Studio
+        messages = [{"role": "system", "content": system_prompt}]
+        
+        # Add conversation history (last 10 messages to keep context manageable)
+        for msg in history[-10:]:
+            messages.append({"role": msg["role"], "content": msg["content"]})
+        
+        # Add current user message
+        messages.append({"role": "user", "content": user_message})
+        
+        # Call LM Studio API
+        try:
+            response = requests.post(
+                LM_STUDIO_URL,
+                json={
+                    "model": "meta-llama-3.1-8b-instruct",
+                    "messages": messages,
+                    "temperature": 0.7,
+                    "max_tokens": 500,
+                    "stream": False
+                },
+                timeout=60
+            )
+            response.raise_for_status()
+            result = response.json()
+            
+            assistant_message = result["choices"][0]["message"]["content"]
+            
+            return jsonify({
+                "success": True,
+                "response": assistant_message,
+                "model": "meta-llama-3.1-8b-instruct"
+            })
+            
+        except requests.exceptions.ConnectionError:
+            return jsonify({
+                "success": False,
+                "error": "LM Studio not running. Please start LM Studio with the model loaded.",
+                "response": "I'm sorry, I can't connect to my AI brain right now. Please make sure LM Studio is running."
+            }), 503
+        except requests.exceptions.Timeout:
+            return jsonify({
+                "success": False,
+                "error": "LM Studio response timeout",
+                "response": "I'm taking too long to think. Please try a simpler question."
+            }), 504
+            
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "error": str(e),
+            "response": "Something went wrong. Please try again."
+        }), 500
+
+
 if __name__ == "__main__":
     print("=" * 60)
     print("  AgroSmart: Green Growth Edition - Farm Agent Server")
