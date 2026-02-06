@@ -102,13 +102,6 @@ def analyze_leaf_colors(frame):
         return "HEALTHY: Mild Stress", (0, 255, 128), min(0.85, 0.60 + green_pct/200)
     else:
         return "CHECK: Low Vegetation", (255, 255, 0), 0.50
-    
-    return {
-        "green": round(green_pct, 1),
-        "yellow": round(yellow_pct, 1),
-        "brown": round(brown_pct, 1)
-    }
-
 
 def draw_analysis_overlay(frame, diagnosis, color, confidence, color_stats=None):
     """Draw analysis results on frame."""

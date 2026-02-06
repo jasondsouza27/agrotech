@@ -19,6 +19,14 @@ import threading
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.preprocessing import LabelEncoder
 
+# OpenCV for image analysis
+try:
+    import cv2
+    CV_AVAILABLE = True
+except ImportError:
+    CV_AVAILABLE = False
+    print("⚠️ OpenCV not installed. Using mock image analysis.")
+
 app = Flask(__name__)
 CORS(app)  # Enable CORS for all routes
 
@@ -1481,77 +1489,358 @@ def crop_model_info():
     }), 200
 
 
+# Diagnosis templates for leaf analysis
+DIAGNOSIS_TEMPLATES = {
+    "healthy": {
+        "id": "healthy",
+        "status": "healthy",
+        "diagnosis": "Healthy Crop",
+        "description": "Your crop is healthy with strong chlorophyll presence. No signs of disease or deficiency.",
+        "remedy": "Continue current care. Maintain soil moisture at 60% and monitor weekly.",
+        "severity": "none",
+        "icon": "✅",
+        "color": "#22c55e"
+    },
+    "mild_stress": {
+        "id": "mild_stress",
+        "status": "healthy",
+        "diagnosis": "Mild Environmental Stress",
+        "description": "Minor stress indicators but generally healthy. May be due to temperature fluctuations.",
+        "remedy": "Ensure consistent watering. Provide shade during peak heat if needed.",
+        "severity": "low",
+        "icon": "✅",
+        "color": "#22c55e"
+    },
+    "nitrogen_deficiency": {
+        "id": "nitrogen_deficiency",
+        "status": "deficiency",
+        "diagnosis": "Nitrogen Deficiency",
+        "description": "Yellowing detected in leaves indicating low nitrogen levels.",
+        "remedy": "Apply compost tea or fish emulsion. Plant legumes nearby to fix nitrogen naturally.",
+        "severity": "moderate",
+        "icon": "⚠️",
+        "color": "#eab308"
+    },
+    "severe_nitrogen_deficiency": {
+        "id": "severe_nitrogen_deficiency",
+        "status": "deficiency",
+        "diagnosis": "Severe Nitrogen Deficiency",
+        "description": "Significant yellowing and chlorosis. Advanced nitrogen starvation.",
+        "remedy": "Immediate application of fish emulsion (1 tbsp/gallon) or blood meal.",
+        "severity": "high",
+        "icon": "🔴",
+        "color": "#ef4444"
+    },
+    "early_blight": {
+        "id": "early_blight",
+        "status": "disease",
+        "diagnosis": "Early Blight (Alternaria)",
+        "description": "Brown spots with yellowing detected. Common fungal disease.",
+        "remedy": "Apply neem oil spray. Remove affected leaves. Improve air circulation.",
+        "severity": "moderate",
+        "icon": "⚠️",
+        "color": "#f97316"
+    },
+    "late_blight": {
+        "id": "late_blight",
+        "status": "disease",
+        "diagnosis": "Late Blight (Phytophthora)",
+        "description": "Severe brown lesions detected. Spreads rapidly in humid conditions.",
+        "remedy": "Remove and destroy affected material. Apply copper-based organic fungicide.",
+        "severity": "critical",
+        "icon": "🔴",
+        "color": "#dc2626"
+    },
+    "leaf_spot": {
+        "id": "leaf_spot",
+        "status": "disease",
+        "diagnosis": "Bacterial/Fungal Leaf Spot",
+        "description": "Dark spots detected on leaf surface.",
+        "remedy": "Apply baking soda solution. Remove affected leaves. Avoid overhead watering.",
+        "severity": "moderate",
+        "icon": "⚠️",
+        "color": "#f97316"
+    },
+    "nutrient_stress": {
+        "id": "nutrient_stress",
+        "status": "deficiency",
+        "diagnosis": "General Nutrient Stress",
+        "description": "Mixed color signals suggesting possible nutrient imbalance.",
+        "remedy": "Apply balanced organic fertilizer. Test soil pH (ideal: 6.0-7.0).",
+        "severity": "moderate",
+        "icon": "⚠️",
+        "color": "#eab308"
+    }
+}
+
+
+def is_leaf_image(img, mode="upload"):
+    """
+    Strict leaf validation. Requires dominant green presence and leaf-like texture.
+    Rejects non-leaf objects like skin, walls, furniture, etc.
+    """
+    hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+    total_pixels = img.shape[0] * img.shape[1]
+    
+    # Strict green detection (core leaf color)
+    green_mask = cv2.inRange(hsv, np.array([30, 30, 30]), np.array([85, 255, 255]))
+    # Yellow-green (stressed/aging leaves)
+    yellow_mask = cv2.inRange(hsv, np.array([18, 40, 40]), np.array([30, 255, 255]))
+    # Brown (dried/diseased leaves - tighter to avoid skin/wood)
+    brown_mask = cv2.inRange(hsv, np.array([5, 50, 30]), np.array([18, 200, 180]))
+    
+    green_pct = (cv2.countNonZero(green_mask) / total_pixels) * 100
+    yellow_pct = (cv2.countNonZero(yellow_mask) / total_pixels) * 100
+    brown_pct = (cv2.countNonZero(brown_mask) / total_pixels) * 100
+    plant_pct = green_pct + yellow_pct + brown_pct
+    
+    # Green must be the dominant plant color (at least some green present)
+    # This prevents skin/wood/furniture from passing via brown alone
+    has_green = green_pct >= 5
+    
+    # Overall plant coverage thresholds
+    if mode == "webcam":
+        threshold = 50  # Leaf should dominate the cropped center
+    else:
+        threshold = 30  # Upload: leaf should be main subject
+    
+    is_leaf = plant_pct >= threshold and has_green
+    
+    if not is_leaf:
+        if not has_green:
+            reason = "No green leaf detected. Please capture an actual leaf."
+        else:
+            reason = "Leaf too small or far away. Fill the guide box with the leaf."
+    else:
+        reason = ""
+    
+    print(f"🔍 Leaf check ({mode}): green={green_pct:.1f}%, yellow={yellow_pct:.1f}%, "
+          f"brown={brown_pct:.1f}%, total={plant_pct:.1f}%, has_green={has_green} -> {'✅' if is_leaf else '❌'}")
+    
+    return is_leaf, reason, {"plant_pct": round(plant_pct, 1), "green_pct": round(green_pct, 1)}
+
+
+def analyze_leaf_colors(img):
+    """
+    Analyze leaf image using color-based computer vision.
+    Returns diagnosis based on green/yellow/brown ratios.
+    """
+    hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+    height, width = img.shape[:2]
+    total_pixels = height * width
+    
+    # Color masks
+    green_mask = cv2.inRange(hsv, np.array([35, 40, 40]), np.array([85, 255, 255]))
+    yellow_mask = cv2.inRange(hsv, np.array([15, 40, 40]), np.array([35, 255, 255]))
+    brown_mask1 = cv2.inRange(hsv, np.array([0, 30, 20]), np.array([20, 200, 180]))
+    brown_mask2 = cv2.inRange(hsv, np.array([160, 30, 20]), np.array([180, 200, 180]))
+    brown_mask = cv2.bitwise_or(brown_mask1, brown_mask2)
+    dark_mask = cv2.inRange(hsv, np.array([0, 0, 0]), np.array([180, 255, 50]))
+    
+    # Calculate percentages
+    green_pct = (cv2.countNonZero(green_mask) / total_pixels) * 100
+    yellow_pct = (cv2.countNonZero(yellow_mask) / total_pixels) * 100
+    brown_pct = (cv2.countNonZero(brown_mask) / total_pixels) * 100
+    dark_pct = (cv2.countNonZero(dark_mask) / total_pixels) * 100
+    
+    # Decision logic
+    if brown_pct > 12 or dark_pct > 8:
+        if brown_pct > 20:
+            return "late_blight", min(0.95, 0.70 + brown_pct/100)
+        else:
+            return "leaf_spot", min(0.90, 0.65 + brown_pct/100)
+    elif yellow_pct > 18 and green_pct < 45:
+        if yellow_pct > 35:
+            return "severe_nitrogen_deficiency", min(0.92, 0.65 + yellow_pct/100)
+        else:
+            return "nitrogen_deficiency", min(0.88, 0.60 + yellow_pct/100)
+    elif yellow_pct > 8 and brown_pct > 4:
+        return "early_blight", min(0.88, 0.60 + (yellow_pct + brown_pct)/200)
+    elif green_pct > 45 and yellow_pct < 18 and brown_pct < 12:
+        return "healthy", min(0.96, 0.75 + green_pct/200)
+    elif green_pct > 25 and yellow_pct < 25:
+        return "mild_stress", min(0.85, 0.60 + green_pct/200)
+    else:
+        if green_pct > yellow_pct:
+            return "healthy", 0.65
+        else:
+            return "nutrient_stress", 0.60
+
+
 @app.route("/api/scan/image", methods=["POST"])
 def scan_image():
     """
     POST /api/scan/image
-    Mock endpoint for crop/soil image analysis.
-    Simulates AI-powered diagnosis of plant health issues.
-    
-    Returns diagnosis after 1 second processing delay.
+    Analyze crop leaf image using color-based computer vision.
     """
     try:
-        # Simulate AI processing time
-        time.sleep(1)
+        processing_start = time.time()
         
-        # Mock diagnoses pool
-        diagnoses = [
-            {
-                "status": "Nitrogen Deficiency",
-                "remedy": "Apply nitrogen-rich fertilizer or plant nitrogen-fixing crops like beans or legumes",
-                "severity": "moderate",
-                "confidence": 0.87
-            },
-            {
-                "status": "Phosphorus Deficiency",
-                "remedy": "Add bone meal or rock phosphate to soil. Consider mycorrhizal inoculants",
-                "severity": "mild",
-                "confidence": 0.92
-            },
-            {
-                "status": "Potassium Deficiency",
-                "remedy": "Apply wood ash or potassium sulfate. Mulch with banana peels",
-                "severity": "moderate",
-                "confidence": 0.85
-            },
-            {
-                "status": "Healthy",
-                "remedy": "No action needed. Continue current maintenance schedule",
-                "severity": "none",
-                "confidence": 0.95
-            },
-            {
-                "status": "Fungal Infection Detected",
-                "remedy": "Apply organic fungicide. Improve air circulation. Remove affected leaves",
-                "severity": "high",
-                "confidence": 0.89
-            },
-            {
-                "status": "Pest Damage",
-                "remedy": "Introduce beneficial insects. Apply neem oil spray. Check for aphids or caterpillars",
-                "severity": "moderate",
-                "confidence": 0.83
-            },
-            {
-                "status": "Water Stress",
-                "remedy": "Adjust irrigation schedule. Check soil drainage. Consider mulching to retain moisture",
-                "severity": "moderate",
-                "confidence": 0.91
+        # Check if image file is present
+        if 'image' not in request.files:
+            return jsonify({
+                "success": False,
+                "error": "No image file provided",
+                "message": "Please upload an image file"
+            }), 400
+        
+        file = request.files['image']
+        if file.filename == '':
+            return jsonify({
+                "success": False,
+                "error": "No file selected",
+                "message": "Please select an image file"
+            }), 400
+        
+        # Read and analyze image
+        image_data = file.read()
+        
+        if CV_AVAILABLE:
+            # Convert to numpy array and decode
+            nparr = np.frombuffer(image_data, np.uint8)
+            img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+            
+            if img is not None:
+                # Validate it's actually a leaf
+                is_leaf, reject_reason, detection_info = is_leaf_image(img, mode="upload")
+                if not is_leaf:
+                    return jsonify({
+                        "success": False,
+                        "error": "not_a_leaf",
+                        "message": reject_reason,
+                        "detection": detection_info
+                    }), 400
+                
+                # Run color analysis
+                diagnosis_id, confidence = analyze_leaf_colors(img)
+                diagnosis = DIAGNOSIS_TEMPLATES[diagnosis_id].copy()
+                diagnosis["confidence"] = round(confidence, 2)
+                analysis_method = "color_analysis"
+            else:
+                # Fallback if image decode fails
+                diagnosis = DIAGNOSIS_TEMPLATES["healthy"].copy()
+                diagnosis["confidence"] = 0.50
+                analysis_method = "fallback"
+        else:
+            # No OpenCV - return healthy with note
+            diagnosis = DIAGNOSIS_TEMPLATES["healthy"].copy()
+            diagnosis["confidence"] = 0.50
+            diagnosis["description"] += " (Limited analysis - OpenCV not available)"
+            analysis_method = "fallback"
+        
+        processing_time = int((time.time() - processing_start) * 1000)
+        
+        return jsonify({
+            "success": True,
+            "timestamp": datetime.now().isoformat(),
+            "scan_id": f"SCAN-{random.randint(10000, 99999)}",
+            "result": diagnosis,
+            "metadata": {
+                "analysis_method": analysis_method,
+                "processing_time_ms": processing_time,
+                "green_growth_certified": True,
+                "cv_available": CV_AVAILABLE
             }
-        ]
-        
-        # Select a random diagnosis (in production, this would be ML model output)
-        diagnosis = random.choice(diagnoses)
-        diagnosis["timestamp"] = datetime.now().isoformat()
-        diagnosis["processing_time_ms"] = 1000
-        
-        return jsonify(diagnosis), 200
+        }), 200
     
     except Exception as e:
         return jsonify({
+            "success": False,
             "error": f"Image analysis failed: {str(e)}",
-            "status": "Error",
-            "remedy": "Please try again or contact support"
+            "message": "Please try again or contact support"
+        }), 500
+
+
+@app.route("/api/scan/frame", methods=["POST"])
+def scan_frame():
+    """
+    POST /api/scan/frame
+    Analyze a webcam frame (base64 encoded) for leaf disease detection.
+    
+    Expected JSON payload:
+    {
+        "frame": "data:image/jpeg;base64,..."
+    }
+    """
+    try:
+        if not request.is_json:
+            return jsonify({
+                "success": False,
+                "error": "Content-Type must be application/json"
+            }), 400
+        
+        data = request.get_json()
+        frame_data = data.get("frame", "")
+        
+        if not frame_data:
+            return jsonify({
+                "success": False,
+                "error": "No frame data provided"
+            }), 400
+        
+        processing_start = time.time()
+        
+        # Decode base64 image
+        # Remove data URL prefix if present (e.g., "data:image/jpeg;base64,")
+        if "," in frame_data:
+            frame_data = frame_data.split(",", 1)[1]
+        
+        import base64
+        image_bytes = base64.b64decode(frame_data)
+        
+        if CV_AVAILABLE:
+            nparr = np.frombuffer(image_bytes, np.uint8)
+            img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+            
+            if img is not None:
+                # Crop to center of frame FIRST — focus on the leaf area
+                h, w = img.shape[:2]
+                crop_img = img[int(h*0.2):int(h*0.8), int(w*0.25):int(w*0.75)]
+                
+                # Validate the CROPPED region (stricter — leaf should fill the guide box)
+                is_leaf, reject_reason, detection_info = is_leaf_image(crop_img, mode="webcam")
+                if not is_leaf:
+                    return jsonify({
+                        "success": False,
+                        "error": "not_a_leaf",
+                        "message": reject_reason,
+                        "detection": detection_info
+                    }), 400
+                
+                diagnosis_id, confidence = analyze_leaf_colors(crop_img)
+                diagnosis = DIAGNOSIS_TEMPLATES[diagnosis_id].copy()
+                diagnosis["confidence"] = round(confidence, 2)
+                analysis_method = "color_analysis"
+            else:
+                diagnosis = DIAGNOSIS_TEMPLATES["healthy"].copy()
+                diagnosis["confidence"] = 0.50
+                analysis_method = "fallback"
+        else:
+            diagnosis = DIAGNOSIS_TEMPLATES["healthy"].copy()
+            diagnosis["confidence"] = 0.50
+            diagnosis["description"] += " (Limited analysis - OpenCV not available)"
+            analysis_method = "fallback"
+        
+        processing_time = int((time.time() - processing_start) * 1000)
+        
+        return jsonify({
+            "success": True,
+            "timestamp": datetime.now().isoformat(),
+            "scan_id": f"LIVE-{random.randint(10000, 99999)}",
+            "result": diagnosis,
+            "metadata": {
+                "analysis_method": analysis_method,
+                "processing_time_ms": processing_time,
+                "mode": "realtime",
+                "cv_available": CV_AVAILABLE
+            }
+        }), 200
+    
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "error": f"Frame analysis failed: {str(e)}",
+            "message": "Please try again"
         }), 500
 
 
@@ -1659,6 +1948,228 @@ def chat():
         }), 500
 
 
+# =============================================================================
+# OPENWEATHERMAP API ENDPOINT
+# =============================================================================
+OPENWEATHER_API_KEY = "e3c0d1432605e246a088cc8d02da3eac"
+
+# District → (lat, lon) mapping for all supported Indian agricultural districts
+DISTRICT_COORDINATES = {
+    # Maharashtra
+    "Nashik": (19.9975, 73.7898), "Pune": (18.5204, 73.8567), "Nagpur": (21.1458, 79.0882),
+    "Ahmednagar": (19.0948, 74.7480), "Solapur": (17.6599, 75.9064), "Kolhapur": (16.7050, 74.2433),
+    "Sangli": (16.8524, 74.5815), "Satara": (17.6805, 74.0183), "Aurangabad": (19.8762, 75.3433),
+    "Jalgaon": (21.0077, 75.5626),
+    # Karnataka
+    "Bangalore Rural": (13.2257, 77.5750), "Belgaum": (15.8497, 74.4977), "Bellary": (15.1394, 76.9214),
+    "Bidar": (17.9104, 77.5199), "Dharwad": (15.4589, 75.0078), "Gulbarga": (17.3297, 76.8343),
+    "Hassan": (13.0068, 76.1004), "Kolar": (13.1360, 78.1292), "Mandya": (12.5244, 76.8958),
+    "Mysore": (12.2958, 76.6394), "Shimoga": (13.9299, 75.5681), "Tumkur": (13.3379, 77.1173),
+    # Gujarat
+    "Ahmedabad": (23.0225, 72.5714), "Amreli": (21.5981, 71.2163), "Anand": (22.5645, 72.9289),
+    "Banaskantha": (24.1738, 72.4313), "Bharuch": (21.7051, 72.9959), "Bhavnagar": (21.7645, 72.1519),
+    "Junagadh": (21.5222, 70.4579), "Kheda": (22.7505, 72.6847), "Mehsana": (23.5880, 72.3693),
+    "Rajkot": (22.3039, 70.8022), "Surat": (21.1702, 72.8311), "Vadodara": (22.3072, 73.1812),
+    # Punjab
+    "Amritsar": (31.6340, 74.8723), "Bathinda": (30.2070, 74.9455), "Ferozepur": (30.9210, 74.6134),
+    "Gurdaspur": (32.0414, 75.4028), "Jalandhar": (31.3260, 75.5762), "Ludhiana": (30.9010, 75.8573),
+    "Moga": (30.8113, 75.1719), "Patiala": (30.3398, 76.3869), "Sangrur": (30.2330, 75.8408),
+    # Haryana
+    "Ambala": (30.3782, 76.7767), "Hisar": (29.1492, 75.7217), "Karnal": (29.6857, 76.9905),
+    "Kurukshetra": (29.9695, 76.8783), "Rohtak": (28.8955, 76.6066), "Sirsa": (29.5349, 75.0280),
+    "Sonipat": (28.9931, 77.0151),
+    # Uttar Pradesh
+    "Agra": (27.1767, 78.0081), "Aligarh": (27.8974, 78.0880), "Allahabad": (25.4358, 81.8463),
+    "Bareilly": (28.3670, 79.4304), "Gorakhpur": (26.7606, 83.3732), "Jhansi": (25.4484, 78.5685),
+    "Kanpur": (26.4499, 80.3319), "Lucknow": (26.8467, 80.9462), "Mathura": (27.4924, 77.6737),
+    "Meerut": (28.9845, 77.7064), "Moradabad": (28.8386, 78.7733), "Muzaffarnagar": (29.4727, 77.7085),
+    "Varanasi": (25.3176, 82.9739),
+    # Madhya Pradesh
+    "Bhopal": (23.2599, 77.4126), "Gwalior": (26.2183, 78.1828), "Indore": (22.7196, 75.8577),
+    "Jabalpur": (23.1815, 79.9864), "Rewa": (24.5373, 81.2932), "Sagar": (23.8388, 78.7378),
+    "Ujjain": (23.1765, 75.7885),
+    # Rajasthan
+    "Ajmer": (26.4499, 74.6399), "Alwar": (27.5530, 76.6346), "Bikaner": (28.0229, 73.3119),
+    "Jaipur": (26.9124, 75.7873), "Jodhpur": (26.2389, 73.0243), "Kota": (25.2138, 75.8648),
+    "Sikar": (27.6094, 75.1399), "Udaipur": (24.5854, 73.7125),
+    # Tamil Nadu
+    "Chennai": (13.0827, 80.2707), "Coimbatore": (11.0168, 76.9558), "Erode": (11.3410, 77.7172),
+    "Madurai": (9.9252, 78.1198), "Salem": (11.6643, 78.1460), "Thanjavur": (10.7870, 79.1378),
+    "Tiruchirappalli": (10.7905, 78.7047), "Tirunelveli": (8.7139, 77.7567),
+    # Andhra Pradesh / Telangana
+    "Anantapur": (14.6819, 77.6006), "Guntur": (16.3067, 80.4365), "Hyderabad": (17.3850, 78.4867),
+    "Karimnagar": (18.4386, 79.1288), "Krishna": (16.6100, 80.7214), "Kurnool": (15.8281, 78.0373),
+    "Nalgonda": (17.0583, 79.2671), "Warangal": (17.9784, 79.5941), "Visakhapatnam": (17.6868, 83.2185),
+    # West Bengal
+    "Barddhaman": (23.2324, 87.8615), "Hooghly": (22.8963, 88.2461), "Kolkata": (22.5726, 88.3639),
+    "Murshidabad": (24.1745, 88.2700), "Nadia": (23.4710, 88.5565),
+    # Bihar
+    "Bhagalpur": (25.2425, 86.9842), "Darbhanga": (26.1542, 85.8918), "Gaya": (24.7955, 84.9994),
+    "Muzaffarpur": (26.1209, 85.3647), "Patna": (25.6093, 85.1376),
+    # Odisha
+    "Balasore": (21.4934, 86.9135), "Cuttack": (20.4625, 85.8830), "Ganjam": (19.3860, 85.0503),
+    "Puri": (19.8135, 85.8312),
+    # Kerala
+    "Alappuzha": (9.4981, 76.3388), "Ernakulam": (9.9816, 76.2999), "Kozhikode": (11.2588, 75.7804),
+    "Palakkad": (10.7867, 76.6548), "Thrissur": (10.5276, 76.2144),
+}
+
+
+@app.route("/api/weather", methods=["GET"])
+def get_weather():
+    """
+    GET /api/weather?district=Nagpur  (preferred - uses user's district)
+    GET /api/weather?lat=20.59&lon=78.96  (manual coordinates)
+    Fetch real-time weather data from OpenWeatherMap API.
+    """
+    district = request.args.get("district", "", type=str)
+    
+    # Resolve coordinates from district name if provided
+    if district and district in DISTRICT_COORDINATES:
+        lat, lon = DISTRICT_COORDINATES[district]
+        print(f"🌤️ Weather for district: {district} → ({lat}, {lon})")
+    else:
+        lat = request.args.get("lat", 20.5937, type=float)
+        lon = request.args.get("lon", 78.9629, type=float)
+        if district:
+            print(f"⚠️ Unknown district '{district}', using fallback coordinates")
+    
+    try:
+        # Current weather
+        current_url = "https://api.openweathermap.org/data/2.5/weather"
+        current_params = {
+            "lat": lat,
+            "lon": lon,
+            "appid": OPENWEATHER_API_KEY,
+            "units": "metric"
+        }
+        current_resp = requests.get(current_url, params=current_params, timeout=10)
+        current_resp.raise_for_status()
+        current_data = current_resp.json()
+        
+        # 5-day / 3-hour forecast for 24h outlook
+        forecast_url = "https://api.openweathermap.org/data/2.5/forecast"
+        forecast_params = {
+            "lat": lat,
+            "lon": lon,
+            "appid": OPENWEATHER_API_KEY,
+            "units": "metric",
+            "cnt": 8  # next 24 hours (8 x 3h)
+        }
+        forecast_resp = requests.get(forecast_url, params=forecast_params, timeout=10)
+        forecast_resp.raise_for_status()
+        forecast_data = forecast_resp.json()
+        
+        # Extract current weather info
+        temp = current_data["main"]["temp"]
+        feels_like = current_data["main"]["feels_like"]
+        humidity = current_data["main"]["humidity"]
+        wind_speed = round(current_data["wind"]["speed"] * 3.6, 1)  # m/s -> km/h
+        wind_deg = current_data["wind"].get("deg", 0)
+        pressure = current_data["main"]["pressure"]
+        visibility = current_data.get("visibility", 10000) / 1000  # m -> km
+        clouds = current_data["clouds"]["all"]
+        weather_main = current_data["weather"][0]["main"]
+        weather_desc = current_data["weather"][0]["description"].capitalize()
+        weather_icon = current_data["weather"][0]["icon"]
+        city_name = current_data.get("name", "Unknown")
+        sunrise = current_data["sys"].get("sunrise")
+        sunset = current_data["sys"].get("sunset")
+        
+        # Rainfall data (last 1h / 3h if available)
+        rain_1h = current_data.get("rain", {}).get("1h", 0)
+        
+        # Build 24h forecast summary
+        forecast_items = []
+        temp_min_24h = temp
+        temp_max_24h = temp
+        rain_chance = 0
+        
+        for item in forecast_data.get("list", []):
+            t = item["main"]["temp"]
+            temp_min_24h = min(temp_min_24h, t)
+            temp_max_24h = max(temp_max_24h, t)
+            pop = item.get("pop", 0) * 100  # probability of precipitation (%)
+            rain_chance = max(rain_chance, pop)
+            forecast_items.append({
+                "time": item["dt_txt"],
+                "temp": round(t, 1),
+                "weather": item["weather"][0]["main"],
+                "description": item["weather"][0]["description"],
+                "rain_probability": round(pop),
+                "humidity": item["main"]["humidity"],
+                "wind_speed": round(item["wind"]["speed"] * 3.6, 1)
+            })
+        
+        # Generate natural language forecast
+        if rain_chance > 60:
+            forecast_text = f"Rain expected ({int(rain_chance)}% chance). Consider delaying irrigation."
+        elif rain_chance > 30:
+            forecast_text = f"{weather_desc} with {int(rain_chance)}% chance of rain. Monitor conditions."
+        elif clouds > 60:
+            forecast_text = f"Cloudy skies ahead. Moderate conditions for field work."
+        else:
+            forecast_text = f"{weather_desc}. Good conditions for irrigation and field work."
+        
+        # Determine weather icon type for frontend
+        icon_map = {
+            "Clear": "sun",
+            "Clouds": "cloud",
+            "Rain": "rain",
+            "Drizzle": "rain",
+            "Thunderstorm": "storm",
+            "Snow": "snow",
+            "Mist": "mist",
+            "Fog": "mist",
+            "Haze": "mist"
+        }
+        
+        return jsonify({
+            "success": True,
+            "current": {
+                "temperature": round(temp, 1),
+                "feels_like": round(feels_like, 1),
+                "humidity": humidity,
+                "wind_speed": wind_speed,
+                "wind_direction": wind_deg,
+                "pressure": pressure,
+                "visibility": round(visibility, 1),
+                "clouds": clouds,
+                "rain_1h": rain_1h,
+                "weather_main": weather_main,
+                "weather_description": weather_desc,
+                "weather_icon": icon_map.get(weather_main, "sun"),
+                "icon_code": weather_icon,
+                "city": city_name,
+                "sunrise": sunrise,
+                "sunset": sunset
+            },
+            "forecast_24h": {
+                "text": forecast_text,
+                "temp_min": round(temp_min_24h, 1),
+                "temp_max": round(temp_max_24h, 1),
+                "rain_chance": round(rain_chance),
+                "items": forecast_items
+            },
+            "source": "OpenWeatherMap",
+            "timestamp": datetime.now().isoformat()
+        }), 200
+        
+    except requests.RequestException as e:
+        print(f"OpenWeatherMap API error: {e}")
+        return jsonify({
+            "success": False,
+            "error": f"Weather service unavailable: {str(e)}",
+            "fallback": {
+                "temperature": 28,
+                "humidity": 65,
+                "wind_speed": 12,
+                "weather_description": "Data unavailable",
+                "weather_icon": "sun"
+            }
+        }), 503
+
+
 @app.route("/health", methods=["GET"])
 def health_check():
     """Health check endpoint for monitoring."""
@@ -1667,7 +2178,7 @@ def health_check():
         "service": "AgroSmart Farm Agent",
         "version": "2.0.0-ML",
         "ml_model": "Random Forest (loaded)" if farm_agent.ml_model.model else "Not loaded",
-        "weather_api": "Open-Meteo",
+        "weather_api": "OpenWeatherMap",
         "mandi_connect": "Active",
         "timestamp": datetime.now().isoformat()
     }), 200
@@ -1929,6 +2440,114 @@ def index():
             "Pump safety monitoring"
         ]
     }), 200
+
+
+# =============================================================================
+# LLM CHAT - LM Studio Integration
+# =============================================================================
+
+LM_STUDIO_URL = "http://127.0.0.1:1234/v1/chat/completions"
+
+@app.route("/api/llm/chat", methods=["POST"])
+def llm_chat():
+    """
+    POST /api/llm/chat
+    Proxy to LM Studio for AI chat functionality.
+    
+    Expected JSON payload:
+    {
+        "message": "User's question",
+        "history": [{"role": "user"|"assistant", "content": "..."}],
+        "sensor_data": {optional sensor context}
+    }
+    """
+    try:
+        if not request.is_json:
+            return jsonify({"error": "Content-Type must be application/json"}), 400
+        
+        data = request.get_json()
+        user_message = data.get("message", "")
+        history = data.get("history", [])
+        sensor_data = data.get("sensor_data", {})
+        
+        if not user_message:
+            return jsonify({"error": "Message is required"}), 400
+        
+        # Build context with sensor data if provided
+        system_prompt = """You are Regen, an AI farming assistant for AgroSmart. You help farmers with:
+- Crop management and disease identification
+- Irrigation scheduling and water conservation
+- Soil health and regenerative agriculture practices
+- Market prices and selling recommendations
+- Weather-based farming decisions
+
+Be concise, practical, and farmer-friendly. Use simple language."""
+        
+        if sensor_data:
+            system_prompt += f"""\n\nCurrent sensor readings from the farm:
+- Soil Moisture: {sensor_data.get('soil_moisture', 'N/A')}%
+- Temperature: {sensor_data.get('temperature', 'N/A')}°C
+- Humidity: {sensor_data.get('humidity', 'N/A')}%
+- Soil pH: {sensor_data.get('soil_ph', 'N/A')}
+- Nitrogen (N): {sensor_data.get('nitrogen', 'N/A')}
+- Phosphorus (P): {sensor_data.get('phosphorus', 'N/A')}
+- Potassium (K): {sensor_data.get('potassium', 'N/A')}
+
+Use this live data to give specific, actionable advice."""
+        
+        # Build messages array for LM Studio
+        messages = [{"role": "system", "content": system_prompt}]
+        
+        # Add conversation history (last 10 messages to keep context manageable)
+        for msg in history[-10:]:
+            messages.append({"role": msg["role"], "content": msg["content"]})
+        
+        # Add current user message
+        messages.append({"role": "user", "content": user_message})
+        
+        # Call LM Studio API
+        try:
+            response = requests.post(
+                LM_STUDIO_URL,
+                json={
+                    "model": "meta-llama-3.1-8b-instruct",
+                    "messages": messages,
+                    "temperature": 0.7,
+                    "max_tokens": 500,
+                    "stream": False
+                },
+                timeout=60
+            )
+            response.raise_for_status()
+            result = response.json()
+            
+            assistant_message = result["choices"][0]["message"]["content"]
+            
+            return jsonify({
+                "success": True,
+                "response": assistant_message,
+                "model": "meta-llama-3.1-8b-instruct"
+            })
+            
+        except requests.exceptions.ConnectionError:
+            return jsonify({
+                "success": False,
+                "error": "LM Studio not running. Please start LM Studio with the model loaded.",
+                "response": "I'm sorry, I can't connect to my AI brain right now. Please make sure LM Studio is running."
+            }), 503
+        except requests.exceptions.Timeout:
+            return jsonify({
+                "success": False,
+                "error": "LM Studio response timeout",
+                "response": "I'm taking too long to think. Please try a simpler question."
+            }), 504
+            
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "error": str(e),
+            "response": "Something went wrong. Please try again."
+        }), 500
 
 
 if __name__ == "__main__":

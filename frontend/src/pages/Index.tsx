@@ -13,7 +13,7 @@ import { MandiConnect } from "@/components/dashboard/MandiConnect";
 import { CropRecommendation } from "@/components/dashboard/CropRecommendation";
 import { LiveSensorData } from "@/components/dashboard/LiveSensorData";
 import { Button } from "@/components/ui/button";
-import { signOut } from "@/lib/supabase";
+import { signOut, supabase } from "@/lib/supabase";
 
 interface LiveMetrics {
   soil_moisture: number;
@@ -37,8 +37,40 @@ const Index = () => {
       severity: "warning" as const,
     },
   ]);
+  const [windSpeed, setWindSpeed] = useState(12);
+  const [windChange, setWindChange] = useState("");
+  const [userDistrict, setUserDistrict] = useState<string>("");
 
-  // Fetch live sensor data
+  // Fetch user's district from Supabase
+  useEffect(() => {
+    const fetchUserDistrict = async () => {
+      try {
+        const { data: { user } } = await supabase.auth.getUser();
+        if (user) {
+          // First try from user metadata (set during signup)
+          const metaDistrict = user.user_metadata?.district;
+          if (metaDistrict) {
+            setUserDistrict(metaDistrict);
+            return;
+          }
+          // Fallback: fetch from farmers table
+          const { data: profile } = await supabase
+            .from("farmers")
+            .select("district")
+            .eq("user_id", user.id)
+            .single();
+          if (profile?.district) {
+            setUserDistrict(profile.district);
+          }
+        }
+      } catch {
+        // Use default location if Supabase is unavailable
+      }
+    };
+    fetchUserDistrict();
+  }, []);
+
+  // Fetch live sensor data from ESP32
   useEffect(() => {
     const fetchLiveData = async () => {
       try {
@@ -91,6 +123,27 @@ const Index = () => {
     const interval = setInterval(fetchLiveData, 250);
     return () => clearInterval(interval);
   }, []);
+
+  // Fetch weather using user's district (for wind speed)
+  useEffect(() => {
+    const fetchWeather = async () => {
+      try {
+        const params = userDistrict ? `?district=${encodeURIComponent(userDistrict)}` : "";
+        const res = await fetch(`http://127.0.0.1:5000/api/weather${params}`);
+        const data = await res.json();
+        if (data.success) {
+          const c = data.current;
+          setWindSpeed(c.wind_speed);
+          setWindChange(c.weather_description);
+        }
+      } catch {
+        // Keep default values on error
+      }
+    };
+    fetchWeather();
+    const interval = setInterval(fetchWeather, 5 * 60 * 1000);
+    return () => clearInterval(interval);
+  }, [userDistrict]);
 
   const handleLogout = async () => {
     await signOut();
@@ -202,7 +255,7 @@ const Index = () => {
 
           {/* Weather Widget */}
           <div>
-            <WeatherWidget />
+            <WeatherWidget district={userDistrict} />
           </div>
 
           {/* Sustainability Metrics */}

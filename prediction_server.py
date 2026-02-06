@@ -12,8 +12,6 @@ from flask_cors import CORS
 import random
 import time
 import os
-import io
-import base64
 from datetime import datetime
 
 # Computer Vision Integration
