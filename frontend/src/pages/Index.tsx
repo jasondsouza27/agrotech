@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { Clock, Droplets, Thermometer, Wind, Beaker, LogOut } from "lucide-react";
 import { MetricCard } from "@/components/dashboard/MetricCard";
@@ -13,7 +13,7 @@ import { RegenChat } from "@/components/dashboard/RegenChat";
 import { MandiConnect } from "@/components/dashboard/MandiConnect";
 import { CropRecommendation } from "@/components/dashboard/CropRecommendation";
 import { Button } from "@/components/ui/button";
-import { signOut } from "@/lib/supabase";
+import { signOut, supabase } from "@/lib/supabase";
 
 const alerts = [
   {
@@ -25,6 +25,66 @@ const alerts = [
 
 const Index = () => {
   const navigate = useNavigate();
+  const [temperature, setTemperature] = useState(28);
+  const [humidity, setHumidity] = useState(65);
+  const [windSpeed, setWindSpeed] = useState(12);
+  const [tempChange, setTempChange] = useState("");
+  const [windChange, setWindChange] = useState("");
+  const [userDistrict, setUserDistrict] = useState<string>("");
+
+  // Fetch user's district from Supabase
+  useEffect(() => {
+    const fetchUserDistrict = async () => {
+      try {
+        const { data: { user } } = await supabase.auth.getUser();
+        if (user) {
+          // First try from user metadata (set during signup)
+          const metaDistrict = user.user_metadata?.district;
+          if (metaDistrict) {
+            setUserDistrict(metaDistrict);
+            return;
+          }
+          // Fallback: fetch from farmers table
+          const { data: profile } = await supabase
+            .from("farmers")
+            .select("district")
+            .eq("user_id", user.id)
+            .single();
+          if (profile?.district) {
+            setUserDistrict(profile.district);
+          }
+        }
+      } catch {
+        // Use default location if Supabase is unavailable
+      }
+    };
+    fetchUserDistrict();
+  }, []);
+
+  // Fetch weather using user's district
+  useEffect(() => {
+    const fetchWeather = async () => {
+      try {
+        const params = userDistrict ? `?district=${encodeURIComponent(userDistrict)}` : "";
+        const res = await fetch(`http://127.0.0.1:5000/api/weather${params}`);
+        const data = await res.json();
+        if (data.success) {
+          const c = data.current;
+          setTemperature(Math.round(c.temperature));
+          setHumidity(c.humidity);
+          setWindSpeed(c.wind_speed);
+          const feelsLikeDiff = Math.round(c.feels_like - c.temperature);
+          setTempChange(feelsLikeDiff >= 0 ? `Feels like +${feelsLikeDiff}°C` : `Feels like ${feelsLikeDiff}°C`);
+          setWindChange(c.weather_description);
+        }
+      } catch {
+        // Keep default values on error
+      }
+    };
+    fetchWeather();
+    const interval = setInterval(fetchWeather, 5 * 60 * 1000);
+    return () => clearInterval(interval);
+  }, [userDistrict]);
 
   const handleLogout = async () => {
     await signOut();
@@ -82,19 +142,19 @@ const Index = () => {
           />
           <MetricCard
             title="Temperature"
-            value={28}
+            value={temperature}
             unit="°C"
             icon={Thermometer}
-            status="good"
-            change="+1°C from yesterday"
+            status={temperature > 35 ? "danger" : temperature > 30 ? "warning" : "good"}
+            change={tempChange || `Humidity: ${humidity}%`}
           />
           <MetricCard
             title="Wind Speed"
-            value={12}
+            value={windSpeed}
             unit="km/h"
             icon={Wind}
-            status="good"
-            change="-3% from yesterday"
+            status={windSpeed > 40 ? "danger" : windSpeed > 25 ? "warning" : "good"}
+            change={windChange || "Live data"}
           />
           <MetricCard
             title="Soil pH"
@@ -115,7 +175,7 @@ const Index = () => {
 
           {/* Weather Widget */}
           <div>
-            <WeatherWidget />
+            <WeatherWidget district={userDistrict} />
           </div>
 
           {/* Sustainability Metrics */}

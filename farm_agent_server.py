@@ -1642,6 +1642,228 @@ def chat():
         }), 500
 
 
+# =============================================================================
+# OPENWEATHERMAP API ENDPOINT
+# =============================================================================
+OPENWEATHER_API_KEY = "e3c0d1432605e246a088cc8d02da3eac"
+
+# District → (lat, lon) mapping for all supported Indian agricultural districts
+DISTRICT_COORDINATES = {
+    # Maharashtra
+    "Nashik": (19.9975, 73.7898), "Pune": (18.5204, 73.8567), "Nagpur": (21.1458, 79.0882),
+    "Ahmednagar": (19.0948, 74.7480), "Solapur": (17.6599, 75.9064), "Kolhapur": (16.7050, 74.2433),
+    "Sangli": (16.8524, 74.5815), "Satara": (17.6805, 74.0183), "Aurangabad": (19.8762, 75.3433),
+    "Jalgaon": (21.0077, 75.5626),
+    # Karnataka
+    "Bangalore Rural": (13.2257, 77.5750), "Belgaum": (15.8497, 74.4977), "Bellary": (15.1394, 76.9214),
+    "Bidar": (17.9104, 77.5199), "Dharwad": (15.4589, 75.0078), "Gulbarga": (17.3297, 76.8343),
+    "Hassan": (13.0068, 76.1004), "Kolar": (13.1360, 78.1292), "Mandya": (12.5244, 76.8958),
+    "Mysore": (12.2958, 76.6394), "Shimoga": (13.9299, 75.5681), "Tumkur": (13.3379, 77.1173),
+    # Gujarat
+    "Ahmedabad": (23.0225, 72.5714), "Amreli": (21.5981, 71.2163), "Anand": (22.5645, 72.9289),
+    "Banaskantha": (24.1738, 72.4313), "Bharuch": (21.7051, 72.9959), "Bhavnagar": (21.7645, 72.1519),
+    "Junagadh": (21.5222, 70.4579), "Kheda": (22.7505, 72.6847), "Mehsana": (23.5880, 72.3693),
+    "Rajkot": (22.3039, 70.8022), "Surat": (21.1702, 72.8311), "Vadodara": (22.3072, 73.1812),
+    # Punjab
+    "Amritsar": (31.6340, 74.8723), "Bathinda": (30.2070, 74.9455), "Ferozepur": (30.9210, 74.6134),
+    "Gurdaspur": (32.0414, 75.4028), "Jalandhar": (31.3260, 75.5762), "Ludhiana": (30.9010, 75.8573),
+    "Moga": (30.8113, 75.1719), "Patiala": (30.3398, 76.3869), "Sangrur": (30.2330, 75.8408),
+    # Haryana
+    "Ambala": (30.3782, 76.7767), "Hisar": (29.1492, 75.7217), "Karnal": (29.6857, 76.9905),
+    "Kurukshetra": (29.9695, 76.8783), "Rohtak": (28.8955, 76.6066), "Sirsa": (29.5349, 75.0280),
+    "Sonipat": (28.9931, 77.0151),
+    # Uttar Pradesh
+    "Agra": (27.1767, 78.0081), "Aligarh": (27.8974, 78.0880), "Allahabad": (25.4358, 81.8463),
+    "Bareilly": (28.3670, 79.4304), "Gorakhpur": (26.7606, 83.3732), "Jhansi": (25.4484, 78.5685),
+    "Kanpur": (26.4499, 80.3319), "Lucknow": (26.8467, 80.9462), "Mathura": (27.4924, 77.6737),
+    "Meerut": (28.9845, 77.7064), "Moradabad": (28.8386, 78.7733), "Muzaffarnagar": (29.4727, 77.7085),
+    "Varanasi": (25.3176, 82.9739),
+    # Madhya Pradesh
+    "Bhopal": (23.2599, 77.4126), "Gwalior": (26.2183, 78.1828), "Indore": (22.7196, 75.8577),
+    "Jabalpur": (23.1815, 79.9864), "Rewa": (24.5373, 81.2932), "Sagar": (23.8388, 78.7378),
+    "Ujjain": (23.1765, 75.7885),
+    # Rajasthan
+    "Ajmer": (26.4499, 74.6399), "Alwar": (27.5530, 76.6346), "Bikaner": (28.0229, 73.3119),
+    "Jaipur": (26.9124, 75.7873), "Jodhpur": (26.2389, 73.0243), "Kota": (25.2138, 75.8648),
+    "Sikar": (27.6094, 75.1399), "Udaipur": (24.5854, 73.7125),
+    # Tamil Nadu
+    "Chennai": (13.0827, 80.2707), "Coimbatore": (11.0168, 76.9558), "Erode": (11.3410, 77.7172),
+    "Madurai": (9.9252, 78.1198), "Salem": (11.6643, 78.1460), "Thanjavur": (10.7870, 79.1378),
+    "Tiruchirappalli": (10.7905, 78.7047), "Tirunelveli": (8.7139, 77.7567),
+    # Andhra Pradesh / Telangana
+    "Anantapur": (14.6819, 77.6006), "Guntur": (16.3067, 80.4365), "Hyderabad": (17.3850, 78.4867),
+    "Karimnagar": (18.4386, 79.1288), "Krishna": (16.6100, 80.7214), "Kurnool": (15.8281, 78.0373),
+    "Nalgonda": (17.0583, 79.2671), "Warangal": (17.9784, 79.5941), "Visakhapatnam": (17.6868, 83.2185),
+    # West Bengal
+    "Barddhaman": (23.2324, 87.8615), "Hooghly": (22.8963, 88.2461), "Kolkata": (22.5726, 88.3639),
+    "Murshidabad": (24.1745, 88.2700), "Nadia": (23.4710, 88.5565),
+    # Bihar
+    "Bhagalpur": (25.2425, 86.9842), "Darbhanga": (26.1542, 85.8918), "Gaya": (24.7955, 84.9994),
+    "Muzaffarpur": (26.1209, 85.3647), "Patna": (25.6093, 85.1376),
+    # Odisha
+    "Balasore": (21.4934, 86.9135), "Cuttack": (20.4625, 85.8830), "Ganjam": (19.3860, 85.0503),
+    "Puri": (19.8135, 85.8312),
+    # Kerala
+    "Alappuzha": (9.4981, 76.3388), "Ernakulam": (9.9816, 76.2999), "Kozhikode": (11.2588, 75.7804),
+    "Palakkad": (10.7867, 76.6548), "Thrissur": (10.5276, 76.2144),
+}
+
+
+@app.route("/api/weather", methods=["GET"])
+def get_weather():
+    """
+    GET /api/weather?district=Nagpur  (preferred - uses user's district)
+    GET /api/weather?lat=20.59&lon=78.96  (manual coordinates)
+    Fetch real-time weather data from OpenWeatherMap API.
+    """
+    district = request.args.get("district", "", type=str)
+    
+    # Resolve coordinates from district name if provided
+    if district and district in DISTRICT_COORDINATES:
+        lat, lon = DISTRICT_COORDINATES[district]
+        print(f"🌤️ Weather for district: {district} → ({lat}, {lon})")
+    else:
+        lat = request.args.get("lat", 20.5937, type=float)
+        lon = request.args.get("lon", 78.9629, type=float)
+        if district:
+            print(f"⚠️ Unknown district '{district}', using fallback coordinates")
+    
+    try:
+        # Current weather
+        current_url = "https://api.openweathermap.org/data/2.5/weather"
+        current_params = {
+            "lat": lat,
+            "lon": lon,
+            "appid": OPENWEATHER_API_KEY,
+            "units": "metric"
+        }
+        current_resp = requests.get(current_url, params=current_params, timeout=10)
+        current_resp.raise_for_status()
+        current_data = current_resp.json()
+        
+        # 5-day / 3-hour forecast for 24h outlook
+        forecast_url = "https://api.openweathermap.org/data/2.5/forecast"
+        forecast_params = {
+            "lat": lat,
+            "lon": lon,
+            "appid": OPENWEATHER_API_KEY,
+            "units": "metric",
+            "cnt": 8  # next 24 hours (8 x 3h)
+        }
+        forecast_resp = requests.get(forecast_url, params=forecast_params, timeout=10)
+        forecast_resp.raise_for_status()
+        forecast_data = forecast_resp.json()
+        
+        # Extract current weather info
+        temp = current_data["main"]["temp"]
+        feels_like = current_data["main"]["feels_like"]
+        humidity = current_data["main"]["humidity"]
+        wind_speed = round(current_data["wind"]["speed"] * 3.6, 1)  # m/s -> km/h
+        wind_deg = current_data["wind"].get("deg", 0)
+        pressure = current_data["main"]["pressure"]
+        visibility = current_data.get("visibility", 10000) / 1000  # m -> km
+        clouds = current_data["clouds"]["all"]
+        weather_main = current_data["weather"][0]["main"]
+        weather_desc = current_data["weather"][0]["description"].capitalize()
+        weather_icon = current_data["weather"][0]["icon"]
+        city_name = current_data.get("name", "Unknown")
+        sunrise = current_data["sys"].get("sunrise")
+        sunset = current_data["sys"].get("sunset")
+        
+        # Rainfall data (last 1h / 3h if available)
+        rain_1h = current_data.get("rain", {}).get("1h", 0)
+        
+        # Build 24h forecast summary
+        forecast_items = []
+        temp_min_24h = temp
+        temp_max_24h = temp
+        rain_chance = 0
+        
+        for item in forecast_data.get("list", []):
+            t = item["main"]["temp"]
+            temp_min_24h = min(temp_min_24h, t)
+            temp_max_24h = max(temp_max_24h, t)
+            pop = item.get("pop", 0) * 100  # probability of precipitation (%)
+            rain_chance = max(rain_chance, pop)
+            forecast_items.append({
+                "time": item["dt_txt"],
+                "temp": round(t, 1),
+                "weather": item["weather"][0]["main"],
+                "description": item["weather"][0]["description"],
+                "rain_probability": round(pop),
+                "humidity": item["main"]["humidity"],
+                "wind_speed": round(item["wind"]["speed"] * 3.6, 1)
+            })
+        
+        # Generate natural language forecast
+        if rain_chance > 60:
+            forecast_text = f"Rain expected ({int(rain_chance)}% chance). Consider delaying irrigation."
+        elif rain_chance > 30:
+            forecast_text = f"{weather_desc} with {int(rain_chance)}% chance of rain. Monitor conditions."
+        elif clouds > 60:
+            forecast_text = f"Cloudy skies ahead. Moderate conditions for field work."
+        else:
+            forecast_text = f"{weather_desc}. Good conditions for irrigation and field work."
+        
+        # Determine weather icon type for frontend
+        icon_map = {
+            "Clear": "sun",
+            "Clouds": "cloud",
+            "Rain": "rain",
+            "Drizzle": "rain",
+            "Thunderstorm": "storm",
+            "Snow": "snow",
+            "Mist": "mist",
+            "Fog": "mist",
+            "Haze": "mist"
+        }
+        
+        return jsonify({
+            "success": True,
+            "current": {
+                "temperature": round(temp, 1),
+                "feels_like": round(feels_like, 1),
+                "humidity": humidity,
+                "wind_speed": wind_speed,
+                "wind_direction": wind_deg,
+                "pressure": pressure,
+                "visibility": round(visibility, 1),
+                "clouds": clouds,
+                "rain_1h": rain_1h,
+                "weather_main": weather_main,
+                "weather_description": weather_desc,
+                "weather_icon": icon_map.get(weather_main, "sun"),
+                "icon_code": weather_icon,
+                "city": city_name,
+                "sunrise": sunrise,
+                "sunset": sunset
+            },
+            "forecast_24h": {
+                "text": forecast_text,
+                "temp_min": round(temp_min_24h, 1),
+                "temp_max": round(temp_max_24h, 1),
+                "rain_chance": round(rain_chance),
+                "items": forecast_items
+            },
+            "source": "OpenWeatherMap",
+            "timestamp": datetime.now().isoformat()
+        }), 200
+        
+    except requests.RequestException as e:
+        print(f"OpenWeatherMap API error: {e}")
+        return jsonify({
+            "success": False,
+            "error": f"Weather service unavailable: {str(e)}",
+            "fallback": {
+                "temperature": 28,
+                "humidity": 65,
+                "wind_speed": 12,
+                "weather_description": "Data unavailable",
+                "weather_icon": "sun"
+            }
+        }), 503
+
+
 @app.route("/health", methods=["GET"])
 def health_check():
     """Health check endpoint for monitoring."""
@@ -1650,7 +1872,7 @@ def health_check():
         "service": "AgroSmart Farm Agent",
         "version": "2.0.0-ML",
         "ml_model": "Random Forest (loaded)" if farm_agent.ml_model.model else "Not loaded",
-        "weather_api": "Open-Meteo",
+        "weather_api": "OpenWeatherMap",
         "mandi_connect": "Active",
         "timestamp": datetime.now().isoformat()
     }), 200
