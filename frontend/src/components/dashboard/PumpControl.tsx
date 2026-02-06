@@ -1,11 +1,82 @@
- import { useState } from "react";
- import { Power, Settings, Droplets, Gauge } from "lucide-react";
+ import { useState, useEffect } from "react";
+ import { Power, Settings, Droplets, Gauge, RefreshCw } from "lucide-react";
  import { Switch } from "@/components/ui/switch";
  import { Button } from "@/components/ui/button";
  
  export function PumpControl() {
    const [autoMode, setAutoMode] = useState(true);
    const [pumpRunning, setPumpRunning] = useState(false);
+   const [deviceId, setDeviceId] = useState<string | null>(null);
+   const [isConnected, setIsConnected] = useState(false);
+
+   useEffect(() => {
+     const fetchPumpStatus = async () => {
+       try {
+         const response = await fetch("http://127.0.0.1:5000/api/esp32/sensors");
+         if (response.ok) {
+           const data = await response.json();
+           if (data.devices && data.devices.length > 0) {
+             const device = data.devices[0];
+             setDeviceId(device.device_id);
+             setPumpRunning(device.pump_running || false);
+             setAutoMode(device.auto_mode || false);
+             setIsConnected(!device.is_simulated);
+           }
+         }
+       } catch (err) {
+         console.log("ESP32 not connected");
+         setIsConnected(false);
+       }
+     };
+
+     fetchPumpStatus();
+     const interval = setInterval(fetchPumpStatus, 250);
+     return () => clearInterval(interval);
+   }, []);
+
+   const sendPumpCommand = async (command: "ON" | "OFF" | "AUTO") => {
+     if (!deviceId) return;
+     
+     try {
+       const response = await fetch("http://127.0.0.1:5000/api/esp32/pump", {
+         method: "POST",
+         headers: { "Content-Type": "application/json" },
+         body: JSON.stringify({
+           device_id: deviceId,
+           command: command
+         })
+       });
+       
+       if (response.ok) {
+         const result = await response.json();
+         console.log("Pump command sent:", result);
+         
+         // Update local state immediately
+         if (command === "AUTO") {
+           setAutoMode(true);
+         } else {
+           setAutoMode(false);
+           setPumpRunning(command === "ON");
+         }
+       }
+     } catch (err) {
+       console.error("Failed to send pump command:", err);
+     }
+   };
+
+   const handleAutoModeToggle = (checked: boolean) => {
+     if (checked) {
+       sendPumpCommand("AUTO");
+     } else {
+       setAutoMode(false);
+       // Don't send command, just disable auto mode locally
+     }
+   };
+
+   const handlePumpToggle = () => {
+     const command = pumpRunning ? "OFF" : "ON";
+     sendPumpCommand(command);
+   };
  
    return (
     <div className="dashboard-card p-5">
@@ -15,6 +86,11 @@
            <h3 className="text-lg font-semibold text-foreground font-display">
              Pump Control
            </h3>
+           {!isConnected && (
+             <span className="text-xs bg-yellow-500/20 text-yellow-500 px-2 py-0.5 rounded-full">
+               Demo
+             </span>
+           )}
          </div>
          <span className={pumpRunning ? "status-good" : "status-warning"}>
            {pumpRunning ? "Running" : "Stopped"}
@@ -28,7 +104,8 @@
          </div>
          <Switch
            checked={autoMode}
-           onCheckedChange={setAutoMode}
+           onCheckedChange={handleAutoModeToggle}
+           disabled={!isConnected}
          />
        </div>
        
@@ -38,8 +115,8 @@
              ? "bg-destructive hover:bg-destructive/90"
             : "bg-primary hover:bg-primary/90"
          } transition-all duration-300`}
-         onClick={() => setPumpRunning(!pumpRunning)}
-         disabled={autoMode}
+         onClick={handlePumpToggle}
+         disabled={autoMode || !isConnected}
        >
          <Power className="w-4 h-4 mr-2" />
          {pumpRunning ? "Stop Pump" : "Start Pump"}
@@ -78,6 +155,15 @@
           <div className="w-2 h-2 rounded-full bg-accent animate-pulse" />
            <span className="text-xs text-muted-foreground">
              AI auto-control enabled
+           </span>
+         </div>
+       )}
+       
+       {!isConnected && (
+         <div className="mt-4 p-3 rounded-lg bg-yellow-500/10 border border-yellow-500/20 flex items-center gap-2">
+           <RefreshCw className="w-3 h-3 text-yellow-500" />
+           <span className="text-xs text-yellow-500">
+             Connect ESP32 for live control
            </span>
          </div>
        )}

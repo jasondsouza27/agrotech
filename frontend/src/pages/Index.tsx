@@ -1,10 +1,9 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
-import { Clock, Droplets, Thermometer, Wind, Beaker, LogOut } from "lucide-react";
+import { Clock, Droplets, Thermometer, Wind, Beaker, LogOut, Wifi } from "lucide-react";
 import { MetricCard } from "@/components/dashboard/MetricCard";
 import { SensorChart } from "@/components/dashboard/SensorChart";
 import { WeatherWidget } from "@/components/dashboard/WeatherWidget";
-import { PumpControl } from "@/components/dashboard/PumpControl";
 import { LeafDoctor } from "@/components/dashboard/LeafDoctor";
 import { SustainabilityMetrics } from "@/components/dashboard/SustainabilityMetrics";
 import { AlertBanner } from "@/components/dashboard/AlertBanner";
@@ -12,24 +11,98 @@ import { AIInsight } from "@/components/dashboard/AIInsight";
 import { RegenChat } from "@/components/dashboard/RegenChat";
 import { MandiConnect } from "@/components/dashboard/MandiConnect";
 import { CropRecommendation } from "@/components/dashboard/CropRecommendation";
+import { LiveSensorData } from "@/components/dashboard/LiveSensorData";
 import { Button } from "@/components/ui/button";
 import { signOut } from "@/lib/supabase";
 
-const alerts = [
-  {
-    id: "1",
-    message: "Disease risk elevated: Fungal infection probability 67% in Sector B due to high humidity.",
-    severity: "warning" as const,
-  },
-];
+interface LiveMetrics {
+  soil_moisture: number;
+  temperature: number;
+  humidity: number;
+  is_live: boolean;
+}
 
 const Index = () => {
   const navigate = useNavigate();
+  const [liveMetrics, setLiveMetrics] = useState<LiveMetrics>({
+    soil_moisture: 52,
+    temperature: 28,
+    humidity: 65,
+    is_live: false
+  });
+  const [alerts, setAlerts] = useState([
+    {
+      id: "1",
+      message: "Disease risk elevated: Fungal infection probability 67% in Sector B due to high humidity.",
+      severity: "warning" as const,
+    },
+  ]);
+
+  // Fetch live sensor data
+  useEffect(() => {
+    const fetchLiveData = async () => {
+      try {
+        const response = await fetch("http://127.0.0.1:5000/api/esp32/sensors");
+        if (response.ok) {
+          const data = await response.json();
+          if (data.devices && data.devices.length > 0) {
+            const device = data.devices[0];
+            setLiveMetrics({
+              soil_moisture: device.soil_moisture || 52,
+              temperature: device.temperature || 28,
+              humidity: device.humidity || 65,
+              is_live: !device.is_simulated
+            });
+
+            // Generate alerts based on live data
+            const newAlerts = [];
+            if (device.soil_moisture < 30) {
+              newAlerts.push({
+                id: "moisture",
+                message: `⚠️ Soil moisture critically low at ${device.soil_moisture.toFixed(1)}%! Irrigation recommended.`,
+                severity: "critical" as const
+              });
+            }
+            if (device.temperature > 35) {
+              newAlerts.push({
+                id: "temp",
+                message: `🌡️ High temperature alert: ${device.temperature.toFixed(1)}°C. Consider shade protection.`,
+                severity: "warning" as const
+              });
+            }
+            if (device.humidity > 85) {
+              newAlerts.push({
+                id: "humidity",
+                message: `💧 High humidity (${device.humidity.toFixed(1)}%) increases fungal disease risk.`,
+                severity: "warning" as const
+              });
+            }
+            if (newAlerts.length > 0) {
+              setAlerts(newAlerts);
+            }
+          }
+        }
+      } catch (err) {
+        console.log("Using default metrics - ESP32 not connected");
+      }
+    };
+
+    fetchLiveData();
+    const interval = setInterval(fetchLiveData, 250);
+    return () => clearInterval(interval);
+  }, []);
 
   const handleLogout = async () => {
     await signOut();
     navigate("/login");
   };
+
+  const getMoistureStatus = (m: number): "warning" | "good" | "danger" => 
+    m < 30 ? "danger" : m < 50 ? "warning" : "good";
+  const getTempStatus = (t: number): "warning" | "good" | "danger" => 
+    t > 38 ? "danger" : t > 35 ? "warning" : "good";
+  const getHumidityStatus = (h: number): "warning" | "good" | "danger" => 
+    h > 90 ? "warning" : h < 30 ? "warning" : "good";
 
   return (
     <div className="min-h-screen bg-background">
@@ -70,31 +143,40 @@ const Index = () => {
         {/* Alert Banner */}
         <AlertBanner alerts={alerts} />
 
-        {/* Core Metrics - Top Priority */}
+        {/* Live Data Indicator */}
+        {liveMetrics.is_live && (
+          <div className="flex items-center gap-2 mb-4 text-green-500 text-sm">
+            <Wifi className="w-4 h-4" />
+            <span>Live data from ESP32</span>
+            <span className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></span>
+          </div>
+        )}
+
+        {/* Core Metrics - Top Priority (LIVE DATA) */}
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
           <MetricCard
             title="Soil Moisture"
-            value={52}
+            value={Number(liveMetrics.soil_moisture.toFixed(1))}
             unit="%"
             icon={Droplets}
-            status="warning"
-            change="+2% from yesterday"
+            status={getMoistureStatus(liveMetrics.soil_moisture)}
+            change={liveMetrics.is_live ? "🔴 Live" : "Demo data"}
           />
           <MetricCard
             title="Temperature"
-            value={28}
+            value={Number(liveMetrics.temperature.toFixed(1))}
             unit="°C"
             icon={Thermometer}
-            status="good"
-            change="+1°C from yesterday"
+            status={getTempStatus(liveMetrics.temperature)}
+            change={liveMetrics.is_live ? "🔴 Live" : "Demo data"}
           />
           <MetricCard
-            title="Wind Speed"
-            value={12}
-            unit="km/h"
+            title="Humidity"
+            value={Number(liveMetrics.humidity.toFixed(1))}
+            unit="%"
             icon={Wind}
-            status="good"
-            change="-3% from yesterday"
+            status={getHumidityStatus(liveMetrics.humidity)}
+            change={liveMetrics.is_live ? "🔴 Live" : "Demo data"}
           />
           <MetricCard
             title="Soil pH"
@@ -108,6 +190,11 @@ const Index = () => {
 
         {/* Bento Grid Layout */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+          {/* Live Sensor Data from ESP32 */}
+          <div>
+            <LiveSensorData />
+          </div>
+
           {/* Sensor Chart - Spans 2 columns */}
           <div className="lg:col-span-2">
             <SensorChart />
@@ -123,19 +210,14 @@ const Index = () => {
             <SustainabilityMetrics />
           </div>
 
-          {/* Mandi Connect - Market Prices */}
-          <div className="lg:col-span-2 lg:row-span-2">
-            <MandiConnect />
-          </div>
-
-          {/* Pump Control */}
-          <div>
-            <PumpControl />
-          </div>
-
           {/* Crop Recommendation - ML Powered */}
           <div>
             <CropRecommendation />
+          </div>
+
+          {/* Mandi Connect - Market Prices */}
+          <div className="lg:col-span-2 lg:row-span-2">
+            <MandiConnect />
           </div>
 
           {/* Leaf Doctor */}

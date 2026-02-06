@@ -2,6 +2,7 @@
 AgroSmart: Green Growth Edition - Autonomous Farm Agent Server
 A Flask-based prediction server with ML-powered irrigation control using Random Forest.
 Includes Mandi Connect module for real-time market prices.
+ESP32 Live Sensor Integration for IoT-based monitoring.
 """
 
 from flask import Flask, request, jsonify
@@ -14,11 +15,98 @@ import requests
 import pickle
 import os
 import math
+import threading
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.preprocessing import LabelEncoder
 
 app = Flask(__name__)
 CORS(app)  # Enable CORS for all routes
+
+
+# =============================================================================
+# ESP32 LIVE SENSOR DATA STORAGE
+# =============================================================================
+
+class ESP32DataStore:
+    """
+    Thread-safe storage for live ESP32 sensor data.
+    Maintains latest readings and history for each connected device.
+    """
+    
+    def __init__(self, max_history=100):
+        self.devices = {}  # device_id -> latest data
+        self.history = {}  # device_id -> list of historical readings
+        self.max_history = max_history
+        self.lock = threading.Lock()
+        self.pump_commands = {}  # device_id -> pending command
+    
+    def update(self, device_id: str, data: dict):
+        """Update sensor data for a device."""
+        with self.lock:
+            data["last_update"] = datetime.now().isoformat()
+            data["timestamp"] = time.time()
+            
+            self.devices[device_id] = data
+            
+            # Add to history
+            if device_id not in self.history:
+                self.history[device_id] = []
+            
+            self.history[device_id].append({
+                "timestamp": data["timestamp"],
+                "soil_moisture": data.get("soil_moisture", 0),
+                "temperature": data.get("temperature", 0),
+                "humidity": data.get("humidity", 0),
+                "pump_running": data.get("pump_running", False)
+            })
+            
+            # Trim history if needed
+            if len(self.history[device_id]) > self.max_history:
+                self.history[device_id] = self.history[device_id][-self.max_history:]
+    
+    def get_latest(self, device_id: str = None) -> dict:
+        """Get latest data for a device or all devices."""
+        with self.lock:
+            if device_id:
+                return self.devices.get(device_id, {})
+            return dict(self.devices)
+    
+    def get_history(self, device_id: str, limit: int = 50) -> list:
+        """Get historical readings for a device."""
+        with self.lock:
+            history = self.history.get(device_id, [])
+            return history[-limit:]
+    
+    def set_pump_command(self, device_id: str, command: str):
+        """Set a pump command for a device (ON/OFF/AUTO)."""
+        with self.lock:
+            self.pump_commands[device_id] = command
+    
+    def get_pump_command(self, device_id: str) -> str:
+        """Get and clear pending pump command."""
+        with self.lock:
+            return self.pump_commands.pop(device_id, None)
+    
+    def get_connected_devices(self) -> list:
+        """Get list of connected devices with their last update time."""
+        with self.lock:
+            devices = []
+            current_time = time.time()
+            for device_id, data in self.devices.items():
+                last_update = data.get("timestamp", 0)
+                is_online = (current_time - last_update) < 30  # Online if updated within 30s
+                devices.append({
+                    "device_id": device_id,
+                    "last_update": data.get("last_update", "Never"),
+                    "is_online": is_online,
+                    "soil_moisture": data.get("soil_moisture", 0),
+                    "pump_running": data.get("pump_running", False)
+                })
+            return devices
+
+
+# Initialize ESP32 data store
+esp32_store = ESP32DataStore()
 
 
 # =============================================================================
@@ -1066,6 +1154,224 @@ def predict():
             "pump_command": "OFF",
             "agent_reason": "System error - defaulting to safe mode"
         }), 500
+
+
+# =============================================================================
+# ESP32 LIVE SENSOR ENDPOINTS
+# =============================================================================
+
+@app.route("/api/esp32/data", methods=["POST"])
+def receive_esp32_data():
+    """
+    POST /api/esp32/data
+    Receive live sensor data from ESP32 device.
+    
+    Expected JSON payload:
+    {
+        "device_id": "ESP32_XXXXXXXXXXXX",
+        "soil_moisture": 45.5,
+        "temperature": 28.3,
+        "humidity": 65.2,
+        "raw_moisture": 2500,
+        "pump_running": false,
+        "pump_runtime": 0,
+        "auto_mode": true,
+        "wifi_rssi": -45,
+        "uptime": 3600
+    }
+    
+    Returns pump command if any pending.
+    """
+    try:
+        data = request.get_json()
+        
+        if not data or "device_id" not in data:
+            return jsonify({"error": "Missing device_id"}), 400
+        
+        device_id = data["device_id"]
+        
+        # Store the data
+        esp32_store.update(device_id, data)
+        
+        # Log the received data
+        print(f"📡 ESP32 [{device_id[-8:]}]: Moisture={data.get('soil_moisture', 0):.1f}%, "
+              f"Temp={data.get('temperature', 0):.1f}°C, "
+              f"Humidity={data.get('humidity', 0):.1f}%, "
+              f"Pump={'ON' if data.get('pump_running') else 'OFF'}")
+        
+        # Check for pending pump command
+        pending_command = esp32_store.get_pump_command(device_id)
+        
+        # Use ML model to make irrigation decision
+        ml_decision = farm_agent.decide_irrigation({
+            "soil_moisture": data.get("soil_moisture", 50),
+            "temperature": data.get("temperature", 25),
+            "humidity": data.get("humidity", 50),
+            "crop_type": "Maize",  # Default crop
+            "pump_runtime_minutes": data.get("pump_runtime", 0) / 60
+        })
+        
+        response = {
+            "status": "ok",
+            "timestamp": datetime.now().isoformat(),
+            "ml_recommendation": ml_decision.get("pump_command", "OFF"),
+            "ml_confidence": ml_decision.get("ml_confidence", 0)
+        }
+        
+        # Add pump command if pending (manual override)
+        if pending_command:
+            response["pump_command"] = pending_command
+            print(f"📤 Sending command to ESP32: {pending_command}")
+        
+        return jsonify(response), 200
+        
+    except Exception as e:
+        print(f"Error processing ESP32 data: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/esp32/sensors", methods=["GET"])
+def get_live_sensors():
+    """
+    GET /api/esp32/sensors
+    Get latest sensor data from all connected ESP32 devices.
+    
+    Query params:
+        device_id (optional): Get data for specific device
+    
+    Returns real-time sensor readings for dashboard display.
+    """
+    device_id = request.args.get("device_id")
+    
+    if device_id:
+        data = esp32_store.get_latest(device_id)
+        if not data:
+            return jsonify({"error": "Device not found"}), 404
+        return jsonify(data), 200
+    
+    # Return all devices
+    all_data = esp32_store.get_latest()
+    devices = esp32_store.get_connected_devices()
+    
+    # If no ESP32 connected, return simulated data for demo
+    if not all_data:
+        simulated = {
+            "device_id": "DEMO_DEVICE",
+            "soil_moisture": random.uniform(35, 65),
+            "temperature": random.uniform(22, 32),
+            "humidity": random.uniform(50, 80),
+            "pump_running": False,
+            "pump_runtime": 0,
+            "auto_mode": True,
+            "is_simulated": True,
+            "last_update": datetime.now().isoformat()
+        }
+        return jsonify({
+            "devices": [simulated],
+            "total_devices": 1,
+            "note": "No ESP32 connected - showing simulated data"
+        }), 200
+    
+    return jsonify({
+        "devices": list(all_data.values()),
+        "device_status": devices,
+        "total_devices": len(all_data)
+    }), 200
+
+
+@app.route("/api/esp32/history", methods=["GET"])
+def get_sensor_history():
+    """
+    GET /api/esp32/history?device_id=XXX&limit=50
+    Get historical sensor readings for charts.
+    """
+    device_id = request.args.get("device_id")
+    limit = request.args.get("limit", 50, type=int)
+    
+    if not device_id:
+        # Return history for first available device
+        devices = esp32_store.get_connected_devices()
+        if devices:
+            device_id = devices[0]["device_id"]
+        else:
+            # Return simulated history for demo
+            history = []
+            current_time = time.time()
+            for i in range(limit):
+                history.append({
+                    "timestamp": current_time - (limit - i) * 60,
+                    "soil_moisture": 50 + random.uniform(-15, 15),
+                    "temperature": 27 + random.uniform(-3, 3),
+                    "humidity": 65 + random.uniform(-10, 10),
+                    "pump_running": random.random() > 0.8
+                })
+            return jsonify({
+                "device_id": "DEMO_DEVICE",
+                "history": history,
+                "is_simulated": True
+            }), 200
+    
+    history = esp32_store.get_history(device_id, limit)
+    
+    return jsonify({
+        "device_id": device_id,
+        "history": history,
+        "count": len(history)
+    }), 200
+
+
+@app.route("/api/esp32/pump", methods=["POST"])
+def control_pump():
+    """
+    POST /api/esp32/pump
+    Send pump control command to ESP32.
+    
+    JSON payload:
+    {
+        "device_id": "ESP32_XXXX",
+        "command": "ON" | "OFF" | "AUTO"
+    }
+    """
+    try:
+        data = request.get_json()
+        device_id = data.get("device_id")
+        command = data.get("command", "").upper()
+        
+        if not device_id:
+            return jsonify({"error": "Missing device_id"}), 400
+        
+        if command not in ["ON", "OFF", "AUTO"]:
+            return jsonify({"error": "Invalid command. Use ON, OFF, or AUTO"}), 400
+        
+        # Queue the command for the device
+        esp32_store.set_pump_command(device_id, command)
+        
+        print(f"🎮 Pump command queued for {device_id}: {command}")
+        
+        return jsonify({
+            "status": "ok",
+            "message": f"Pump command '{command}' queued for device",
+            "device_id": device_id,
+            "command": command
+        }), 200
+        
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/esp32/devices", methods=["GET"])
+def list_esp32_devices():
+    """
+    GET /api/esp32/devices
+    List all connected ESP32 devices with their status.
+    """
+    devices = esp32_store.get_connected_devices()
+    
+    return jsonify({
+        "devices": devices,
+        "total": len(devices),
+        "online": sum(1 for d in devices if d["is_online"])
+    }), 200
 
 
 # =============================================================================
