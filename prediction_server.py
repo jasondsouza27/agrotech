@@ -497,6 +497,101 @@ def scan_image():
     return jsonify(response), 200
 
 
+@app.route('/api/scan/frame', methods=['POST'])
+def scan_frame():
+    """
+    Scan a frame from webcam for disease detection.
+    
+    Accepts: JSON with base64 encoded image in 'frame' field
+    Returns: JSON diagnosis result
+    """
+    try:
+        data = request.get_json()
+        if not data or 'frame' not in data:
+            return jsonify({
+                "success": False,
+                "error": "No frame data provided",
+                "message": "Please provide base64 encoded image in 'frame' field"
+            }), 400
+        
+        # Decode base64 image
+        import base64
+        import re
+        
+        # Remove data URL prefix if present (e.g., "data:image/jpeg;base64,")
+        frame_data = data['frame']
+        if 'base64,' in frame_data:
+            frame_data = frame_data.split('base64,')[1]
+        
+        image_data = base64.b64decode(frame_data)
+        processing_start = time.time()
+        
+        diagnosis = None
+        analysis_method = "unknown"
+        color_analysis = None
+        
+        # Priority 1: Use color-based analysis
+        if CV_AVAILABLE:
+            try:
+                nparr = np.frombuffer(image_data, np.uint8)
+                img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+                
+                if img is not None:
+                    color_analysis = analyze_leaf_colors(img)
+                    diagnosis_id = color_analysis["diagnosis_id"]
+                    diagnosis = DIAGNOSIS_RESULTS[diagnosis_id].copy()
+                    diagnosis["confidence"] = color_analysis["confidence"]
+                    analysis_method = "color_analysis"
+            except Exception as e:
+                print(f"Color analysis error: {e}")
+                diagnosis = None
+        
+        # Fallback if analysis failed
+        if diagnosis is None:
+            diagnosis = DIAGNOSIS_RESULTS["healthy"].copy()
+            diagnosis["confidence"] = 0.50
+            diagnosis["description"] += " (Limited analysis)"
+            analysis_method = "fallback"
+        
+        processing_time = int((time.time() - processing_start) * 1000)
+        
+        response = {
+            "success": True,
+            "timestamp": datetime.utcnow().isoformat(),
+            "scan_id": f"FRAME-{random.randint(10000, 99999)}",
+            "result": {
+                "id": diagnosis["id"],
+                "status": diagnosis["status"],
+                "confidence": diagnosis["confidence"],
+                "diagnosis": diagnosis["diagnosis"],
+                "description": diagnosis["description"],
+                "remedy": diagnosis["remedy"],
+                "severity": diagnosis["severity"]
+            },
+            "metadata": {
+                "analysis_method": analysis_method,
+                "processing_time_ms": processing_time,
+                "source": "webcam_frame"
+            }
+        }
+        
+        if color_analysis:
+            response["metadata"]["color_analysis"] = {
+                "green_percent": color_analysis["green_percent"],
+                "yellow_percent": color_analysis["yellow_percent"],
+                "brown_percent": color_analysis["brown_percent"]
+            }
+        
+        return jsonify(response), 200
+        
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "error": str(e),
+            "message": "Failed to process frame"
+        }), 500
+
+
 @app.route('/api/scan/diagnoses', methods=['GET'])
 def get_all_diagnoses():
     """Return all possible diagnoses (for reference/testing)."""
@@ -504,6 +599,40 @@ def get_all_diagnoses():
         "success": True,
         "diagnoses": list(DIAGNOSIS_RESULTS.values()),
         "note": "All remedies are organic and sustainable (Green Growth certified)"
+    })
+
+
+@app.route('/api/esp32/sensors', methods=['GET'])
+def get_esp32_sensors():
+    """
+    Get ESP32 sensor data.
+    Returns simulated sensor data for demo purposes.
+    Connect real ESP32 devices for live readings.
+    """
+    # Generate simulated sensor data with slight variations
+    import random
+    base_time = time.time()
+    
+    simulated_device = {
+        "device_id": "ESP32_DEMO_001",
+        "soil_moisture": round(45 + random.uniform(-5, 10), 1),
+        "temperature": round(26 + random.uniform(-2, 4), 1),
+        "humidity": round(62 + random.uniform(-5, 8), 1),
+        "pump_running": random.choice([True, False]),
+        "pump_runtime": random.randint(0, 120),
+        "auto_mode": True,
+        "wifi_rssi": random.randint(-75, -45),
+        "uptime": int(base_time % 86400),
+        "last_update": datetime.utcnow().isoformat(),
+        "is_simulated": True,
+        "is_online": True
+    }
+    
+    return jsonify({
+        "success": True,
+        "devices": [simulated_device],
+        "count": 1,
+        "note": "Simulated data. Connect ESP32 hardware for real sensor readings."
     })
 
 
@@ -540,9 +669,11 @@ if __name__ == '__main__':
     ║   Green Growth Certified Remedies                         ║
     ║                                                           ║
     ║   Endpoints:                                              ║
-    ║   • GET  /api/health        - Health check                ║
-    ║   • POST /api/scan/image    - Scan crop image             ║
+    ║   • GET  /api/health         - Health check               ║
+    ║   • POST /api/scan/image     - Scan crop image            ║
+    ║   • POST /api/scan/frame     - Scan webcam frame          ║
     ║   • GET  /api/scan/diagnoses - List all diagnoses         ║
+    ║   • GET  /api/esp32/sensors  - ESP32 sensor data          ║
     ║                                                           ║
     ╚═══════════════════════════════════════════════════════════╝
     """)
