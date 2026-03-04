@@ -45,7 +45,7 @@
 #define MOISTURE_THRESHOLD_HIGH 60  // Stop pump above this %
 
 // Timing
-#define SENSOR_READ_INTERVAL 2000   // Read sensors every 2 seconds
+#define SENSOR_READ_INTERVAL 200    // Read sensors every 0.2 seconds (fast response)
 #define SERIAL_BAUD_RATE 115200     // Serial communication speed
 
 // ==================== GLOBAL VARIABLES ====================
@@ -200,7 +200,7 @@ void sendSensorData() {
   StaticJsonDocument<300> doc;
   
   doc["device_id"] = deviceId;
-  doc["soil_moisture"] = round(soilMoisture * 10) / 10.0;  // 1 decimal
+  doc["soil_moisture"] = soilMoisture;  // Send raw value for instant updates
   doc["temperature"] = round(temperature * 10) / 10.0;
   doc["humidity"] = round(humidity * 10) / 10.0;
   doc["raw_moisture"] = rawMoistureValue;

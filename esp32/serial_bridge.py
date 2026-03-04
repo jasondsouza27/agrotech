@@ -22,7 +22,7 @@ from datetime import datetime
 # Configuration
 SERVER_URL = "http://127.0.0.1:5000"
 BAUD_RATE = 115200
-READ_TIMEOUT = 2  # seconds
+READ_TIMEOUT = 0.5  # seconds - fast response
 
 # Global state
 pending_command = None
@@ -85,15 +85,11 @@ def send_to_server(data):
 
 
 def send_command_to_esp32(ser, command):
-    """Send pump command to ESP32."""
+    """Send pump command to ESP32 as JSON."""
     try:
-        # Send as plain text command (ESP32 expects PUMP_ON, PUMP_OFF, or AUTO)
-        if command == "ON":
-            cmd = "PUMP_ON\n"
-        elif command == "OFF":
-            cmd = "PUMP_OFF\n"
-        elif command == "AUTO":
-            cmd = "AUTO\n"
+        # Send as JSON command (ESP32 expects {"pump":"ON"}, {"pump":"OFF"}, or {"pump":"AUTO"})
+        if command in ("ON", "OFF", "AUTO"):
+            cmd = json.dumps({"pump": command}) + "\n"
         else:
             print(f"  ⚠ Unknown command: {command}")
             return
@@ -233,8 +229,7 @@ def main():
                     send_command_to_esp32(ser, pending_command)
                     pending_command = None
             
-            # Small delay to prevent CPU overload
-            time.sleep(0.1)
+            # No delay - process data immediately for real-time updates
             
     except KeyboardInterrupt:
         print("\n\n👋 Shutting down...")

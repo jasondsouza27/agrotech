@@ -27,7 +27,7 @@ export function LiveSensorData() {
 
   const fetchSensorData = async () => {
     try {
-      const response = await fetch("http://127.0.0.1:5000/api/esp32/sensors");
+      const response = await fetch("/api/esp32/sensors");
       
       if (response.ok) {
         const data = await response.json();
@@ -63,8 +63,8 @@ export function LiveSensorData() {
 
   useEffect(() => {
     fetchSensorData();
-    // Auto-refresh every 250ms for ultra-fast real-time updates
-    const interval = setInterval(fetchSensorData, 250);
+    // Auto-refresh every 1000ms for real-time updates
+    const interval = setInterval(fetchSensorData, 1000);
     return () => clearInterval(interval);
   }, []);
 
@@ -72,7 +72,7 @@ export function LiveSensorData() {
     if (!sensorData) return;
     
     try {
-      const response = await fetch("http://127.0.0.1:5000/api/esp32/pump", {
+      const response = await fetch("/api/esp32/pump", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({

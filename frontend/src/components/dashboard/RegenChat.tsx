@@ -9,7 +9,7 @@ interface Message {
   content: string;
 }
 
-const API_URL = "http://127.0.0.1:5000";
+const API_URL = "";
 
 export function RegenChat() {
   const [isOpen, setIsOpen] = useState(false);
@@ -19,7 +19,7 @@ export function RegenChat() {
     {
       id: "1",
       role: "assistant",
-      content: "Hello! I'm Regen, your AI farming assistant powered by Llama 3.1. I have access to your live sensor data. How can I help you today?",
+      content: "Hello! I'm Regen, your AI farming assistant powered by Llama 2. I have access to your live sensor data. How can I help you today?",
     },
   ]);
 
@@ -54,6 +54,8 @@ export function RegenChat() {
         potassium: 42
       };
       
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 120000);
       const response = await fetch(`${API_URL}/api/llm/chat`, {
         method: "POST",
         headers: {
@@ -64,7 +66,9 @@ export function RegenChat() {
           history: history,
           sensor_data: sensorData
         }),
+        signal: controller.signal,
       });
+      clearTimeout(timeoutId);
       
       const data = await response.json();
       
@@ -80,7 +84,7 @@ export function RegenChat() {
       const errorMessage: Message = {
         id: (Date.now() + 1).toString(),
         role: "assistant",
-        content: "I'm having trouble connecting. Please make sure LM Studio is running with the Llama 3.1 model loaded.",
+        content: "I'm having trouble connecting. Please make sure LM Studio is running with the Llama 2 model loaded.",
       };
       setMessages(prev => [...prev, errorMessage]);
     } finally {

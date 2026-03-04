@@ -8,6 +8,7 @@ import { LeafDoctor } from "@/components/dashboard/LeafDoctor";
 import { SustainabilityMetrics } from "@/components/dashboard/SustainabilityMetrics";
 import { AlertBanner } from "@/components/dashboard/AlertBanner";
 import { AIInsight } from "@/components/dashboard/AIInsight";
+import { HistoricalLogsModal } from "@/components/dashboard/HistoricalLogsModal";
 import { RegenChat } from "@/components/dashboard/RegenChat";
 import { MandiConnect } from "@/components/dashboard/MandiConnect";
 import { CropRecommendation } from "@/components/dashboard/CropRecommendation";
@@ -40,6 +41,7 @@ const Index = () => {
   const [windSpeed, setWindSpeed] = useState(12);
   const [windChange, setWindChange] = useState("");
   const [userDistrict, setUserDistrict] = useState<string>("");
+  const [logsOpen, setLogsOpen] = useState(false);
 
   // Fetch user's district from Supabase
   useEffect(() => {
@@ -74,7 +76,7 @@ const Index = () => {
   useEffect(() => {
     const fetchLiveData = async () => {
       try {
-        const response = await fetch("http://127.0.0.1:5000/api/esp32/sensors");
+        const response = await fetch("/api/esp32/sensors");
         if (response.ok) {
           const data = await response.json();
           if (data.devices && data.devices.length > 0) {
@@ -120,7 +122,7 @@ const Index = () => {
     };
 
     fetchLiveData();
-    const interval = setInterval(fetchLiveData, 250);
+    const interval = setInterval(fetchLiveData, 1000);
     return () => clearInterval(interval);
   }, []);
 
@@ -129,7 +131,7 @@ const Index = () => {
     const fetchWeather = async () => {
       try {
         const params = userDistrict ? `?district=${encodeURIComponent(userDistrict)}` : "";
-        const res = await fetch(`http://127.0.0.1:5000/api/weather${params}`);
+        const res = await fetch(`/api/weather${params}`);
         const data = await res.json();
         if (data.success) {
           const c = data.current;
@@ -174,7 +176,7 @@ const Index = () => {
             </div>
           </div>
           <div className="flex items-center gap-3">
-            <Button variant="outline" className="gap-2">
+            <Button variant="outline" className="gap-2" onClick={() => setLogsOpen(true)}>
               <Clock className="w-4 h-4" />
               Historical Logs
             </Button>
@@ -270,7 +272,7 @@ const Index = () => {
 
           {/* Mandi Connect - Market Prices */}
           <div className="lg:col-span-2 lg:row-span-2">
-            <MandiConnect />
+            <MandiConnect district={userDistrict} />
           </div>
 
           {/* Leaf Doctor */}
@@ -280,11 +282,16 @@ const Index = () => {
         </div>
 
         {/* AI Insight - Bottom, Low Priority */}
-        <AIInsight />
+        <div id="insight-log">
+          <AIInsight />
+        </div>
       </main>
 
       {/* Floating Chat */}
       <RegenChat />
+
+      {/* Historical Logs Popup */}
+      <HistoricalLogsModal open={logsOpen} onOpenChange={setLogsOpen} />
     </div>
   );
 };

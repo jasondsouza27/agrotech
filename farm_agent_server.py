@@ -47,6 +47,35 @@ class ESP32DataStore:
         self.max_history = max_history
         self.lock = threading.Lock()
         self.pump_commands = {}  # device_id -> pending command
+        self.event_log = []  # System event audit trail
+        self.max_events = 200
+        self._last_pump_state = {}  # Track pump state changes per device
+        self._last_auto_mode = {}  # Track auto mode changes per device
+    
+    def log_event(self, action: str, reason: str, category: str = "system", sensor_snapshot: dict = None):
+        """Log a system event for the audit trail."""
+        with self.lock:
+            event = {
+                "timestamp": datetime.now().isoformat(),
+                "epoch": time.time(),
+                "action": action,
+                "reason": reason,
+                "category": category,  # pump, sensor, ml, system, scan
+            }
+            if sensor_snapshot:
+                event["sensors"] = sensor_snapshot
+            self.event_log.append(event)
+            if len(self.event_log) > self.max_events:
+                self.event_log = self.event_log[-self.max_events:]
+            print(f"📝 Event logged: [{category}] {action} — {reason}")
+    
+    def get_events(self, limit: int = 50, category: str = None) -> list:
+        """Get recent events, optionally filtered by category."""
+        with self.lock:
+            events = self.event_log
+            if category:
+                events = [e for e in events if e.get("category") == category]
+            return list(reversed(events[-limit:]))  # Newest first
     
     def update(self, device_id: str, data: dict):
         """Update sensor data for a device."""
@@ -68,6 +97,54 @@ class ESP32DataStore:
                 "pump_running": data.get("pump_running", False)
             })
             
+            # Detect and log pump state changes
+            current_pump = data.get("pump_running", False)
+            prev_pump = self._last_pump_state.get(device_id)
+            if prev_pump is not None and current_pump != prev_pump:
+                moisture = data.get("soil_moisture", 0)
+                temp = data.get("temperature", 0)
+                humidity = data.get("humidity", 0)
+                snapshot = {"soil_moisture": round(moisture, 1), "temperature": round(temp, 1), "humidity": round(humidity, 1)}
+                if current_pump:
+                    self.event_log.append({
+                        "timestamp": datetime.now().isoformat(),
+                        "epoch": time.time(),
+                        "action": "Pump turned ON",
+                        "reason": f"Irrigation started. Soil moisture at {moisture:.1f}%, Temp {temp:.1f}°C, Humidity {humidity:.1f}%.",
+                        "category": "pump",
+                        "sensors": snapshot
+                    })
+                else:
+                    runtime = data.get("pump_runtime", 0)
+                    self.event_log.append({
+                        "timestamp": datetime.now().isoformat(),
+                        "epoch": time.time(),
+                        "action": "Pump turned OFF",
+                        "reason": f"Irrigation stopped after {runtime}s. Soil moisture at {moisture:.1f}%.",
+                        "category": "pump",
+                        "sensors": snapshot
+                    })
+                if len(self.event_log) > self.max_events:
+                    self.event_log = self.event_log[-self.max_events:]
+            self._last_pump_state[device_id] = current_pump
+            
+            # Detect auto mode changes
+            current_auto = data.get("auto_mode")
+            if current_auto is not None:
+                prev_auto = self._last_auto_mode.get(device_id)
+                if prev_auto is not None and current_auto != prev_auto:
+                    mode_str = "AUTO" if current_auto else "MANUAL"
+                    self.event_log.append({
+                        "timestamp": datetime.now().isoformat(),
+                        "epoch": time.time(),
+                        "action": f"Mode changed to {mode_str}",
+                        "reason": f"Irrigation mode switched to {mode_str}. {'System will manage pump automatically.' if current_auto else 'Manual pump control enabled.'}",
+                        "category": "system"
+                    })
+                    if len(self.event_log) > self.max_events:
+                        self.event_log = self.event_log[-self.max_events:]
+                self._last_auto_mode[device_id] = current_auto
+
             # Trim history if needed
             if len(self.history[device_id]) > self.max_history:
                 self.history[device_id] = self.history[device_id][-self.max_history:]
@@ -115,6 +192,11 @@ class ESP32DataStore:
 
 # Initialize ESP32 data store
 esp32_store = ESP32DataStore()
+esp32_store.log_event(
+    "System started",
+    "AgroSmart server initialized. ML models loaded, awaiting ESP32 connection.",
+    category="system"
+)
 
 
 # =============================================================================
@@ -1219,6 +1301,34 @@ def receive_esp32_data():
             "pump_runtime_minutes": data.get("pump_runtime", 0) / 60
         })
         
+        # Log ML override events (critical situations)
+        override_reason = ml_decision.get("override_reason")
+        if override_reason:
+            snapshot = {
+                "soil_moisture": round(data.get("soil_moisture", 0), 1),
+                "temperature": round(data.get("temperature", 0), 1),
+                "humidity": round(data.get("humidity", 0), 1)
+            }
+            if override_reason == "Critical moisture level":
+                esp32_store.log_event(
+                    "Critical moisture override",
+                    f"Soil moisture critically low at {data.get('soil_moisture', 0):.1f}%. ML overridden — emergency irrigation activated.",
+                    category="ml", sensor_snapshot=snapshot
+                )
+            elif override_reason == "High rain probability":
+                rain_prob = ml_decision.get("weather_data", {}).get("rain_probability", 0)
+                esp32_store.log_event(
+                    "Rain forecast — pump paused",
+                    f"High rain probability ({rain_prob}%) detected. Irrigation paused to conserve water.",
+                    category="ml", sensor_snapshot=snapshot
+                )
+            elif override_reason == "Safety stop triggered":
+                esp32_store.log_event(
+                    "Emergency pump safety stop",
+                    ml_decision.get("agent_reason", "Pump runtime exceeded safe limit."),
+                    category="ml", sensor_snapshot=snapshot
+                )
+        
         response = {
             "status": "ok",
             "timestamp": datetime.now().isoformat(),
@@ -1354,6 +1464,33 @@ def control_pump():
         # Queue the command for the device
         esp32_store.set_pump_command(device_id, command)
         
+        # Log the manual command event
+        latest = esp32_store.get_latest(device_id)
+        snapshot = {
+            "soil_moisture": round(latest.get("soil_moisture", 0), 1),
+            "temperature": round(latest.get("temperature", 0), 1),
+            "humidity": round(latest.get("humidity", 0), 1)
+        } if latest else None
+        
+        if command == "ON":
+            esp32_store.log_event(
+                "Manual pump ON",
+                f"User manually activated pump. Soil moisture: {snapshot['soil_moisture'] if snapshot else 'N/A'}%.",
+                category="pump", sensor_snapshot=snapshot
+            )
+        elif command == "OFF":
+            esp32_store.log_event(
+                "Manual pump OFF",
+                f"User manually stopped pump. Soil moisture: {snapshot['soil_moisture'] if snapshot else 'N/A'}%.",
+                category="pump", sensor_snapshot=snapshot
+            )
+        elif command == "AUTO":
+            esp32_store.log_event(
+                "Switched to AUTO mode",
+                f"User enabled automatic irrigation. System will manage pump based on moisture thresholds (ON<30%, OFF>60%).",
+                category="system", sensor_snapshot=snapshot
+            )
+        
         print(f"🎮 Pump command queued for {device_id}: {command}")
         
         return jsonify({
@@ -1365,6 +1502,28 @@ def control_pump():
         
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/esp32/events", methods=["GET"])
+def get_system_events():
+    """
+    GET /api/esp32/events?limit=50&category=pump
+    Get system event audit trail for the AI Insight Log.
+    
+    Query params:
+        limit (int): Max events to return (default 50)
+        category (str): Filter by category (pump, sensor, ml, system, scan)
+    """
+    limit = request.args.get("limit", 50, type=int)
+    category = request.args.get("category")
+    
+    events = esp32_store.get_events(limit=limit, category=category)
+    
+    return jsonify({
+        "events": events,
+        "total": len(events),
+        "categories": ["pump", "sensor", "ml", "system", "scan"]
+    }), 200
 
 
 @app.route("/api/esp32/devices", methods=["GET"])
@@ -1729,6 +1888,13 @@ def scan_image():
             analysis_method = "fallback"
         
         processing_time = int((time.time() - processing_start) * 1000)
+        
+        # Log the scan event
+        esp32_store.log_event(
+            f"Leaf scan: {diagnosis.get('diagnosis', 'Unknown')}",
+            f"{diagnosis.get('description', '')} Confidence: {diagnosis.get('confidence', 0)*100:.0f}%. Remedy: {diagnosis.get('remedy', 'N/A')}",
+            category="scan"
+        )
         
         return jsonify({
             "success": True,
@@ -2198,15 +2364,16 @@ def get_market_prices():
     
     Query Parameters:
         crop (required): Crop name (e.g., "rice", "tomato", "wheat")
-        lat (optional): Farmer's latitude
-        lon (optional): Farmer's longitude
+        district (optional): Farmer's district name from signup (e.g., "Nashik")
+        lat (optional): Farmer's latitude (fallback if district not provided)
+        lon (optional): Farmer's longitude (fallback if district not provided)
     
     Returns:
         JSON with market prices from 7 nearest mandis, local trader comparison,
         and recommendation for best selling price.
     
     Example:
-        GET /api/market/prices?crop=tomato&lat=19.0760&lon=72.8777
+        GET /api/market/prices?crop=tomato&district=Nashik
     """
     try:
         # Get crop parameter
@@ -2218,9 +2385,28 @@ def get_market_prices():
                 "example": "/api/market/prices?crop=rice"
             }), 400
         
-        # Get optional location parameters
-        farmer_lat = request.args.get("lat", type=float)
-        farmer_lon = request.args.get("lon", type=float)
+        # Resolve location: district name first, then lat/lon fallback
+        district = request.args.get("district", "", type=str)
+        farmer_lat = None
+        farmer_lon = None
+        
+        if district and district in DISTRICT_COORDINATES:
+            farmer_lat, farmer_lon = DISTRICT_COORDINATES[district]
+            print(f"🏪 Market prices for district: {district} → ({farmer_lat}, {farmer_lon})")
+        elif district:
+            # Try case-insensitive match
+            for key, coords in DISTRICT_COORDINATES.items():
+                if key.lower() == district.lower():
+                    farmer_lat, farmer_lon = coords
+                    print(f"🏪 Market prices for district: {key} → ({farmer_lat}, {farmer_lon})")
+                    break
+            if farmer_lat is None:
+                print(f"⚠️ Unknown district '{district}' for market prices, using lat/lon or default")
+        
+        # Fallback to explicit lat/lon if district didn't resolve
+        if farmer_lat is None:
+            farmer_lat = request.args.get("lat", type=float)
+            farmer_lon = request.args.get("lon", type=float)
         
         # Fetch market prices
         prices = MandiConnect.get_market_prices(crop, farmer_lat, farmer_lon)
@@ -2474,32 +2660,16 @@ def llm_chat():
             return jsonify({"error": "Message is required"}), 400
         
         # Build context with sensor data if provided
-        system_prompt = """You are Regen, an AI farming assistant for AgroSmart. You help farmers with:
-- Crop management and disease identification
-- Irrigation scheduling and water conservation
-- Soil health and regenerative agriculture practices
-- Market prices and selling recommendations
-- Weather-based farming decisions
-
-Be concise, practical, and farmer-friendly. Use simple language."""
+        system_prompt = "You are Regen, a concise AI farming assistant. Give short, practical answers about crops, irrigation, soil, and farming. Keep replies under 3 sentences."
         
         if sensor_data:
-            system_prompt += f"""\n\nCurrent sensor readings from the farm:
-- Soil Moisture: {sensor_data.get('soil_moisture', 'N/A')}%
-- Temperature: {sensor_data.get('temperature', 'N/A')}°C
-- Humidity: {sensor_data.get('humidity', 'N/A')}%
-- Soil pH: {sensor_data.get('soil_ph', 'N/A')}
-- Nitrogen (N): {sensor_data.get('nitrogen', 'N/A')}
-- Phosphorus (P): {sensor_data.get('phosphorus', 'N/A')}
-- Potassium (K): {sensor_data.get('potassium', 'N/A')}
-
-Use this live data to give specific, actionable advice."""
+            system_prompt += f" Farm sensors: Moisture={sensor_data.get('soil_moisture', 'N/A')}%, Temp={sensor_data.get('temperature', 'N/A')}°C, Humidity={sensor_data.get('humidity', 'N/A')}%, pH={sensor_data.get('soil_ph', 'N/A')}."
         
         # Build messages array for LM Studio
         messages = [{"role": "system", "content": system_prompt}]
         
-        # Add conversation history (last 10 messages to keep context manageable)
-        for msg in history[-10:]:
+        # Add conversation history (last 4 messages to keep prompt small for faster inference)
+        for msg in history[-4:]:
             messages.append({"role": msg["role"], "content": msg["content"]})
         
         # Add current user message
@@ -2510,13 +2680,13 @@ Use this live data to give specific, actionable advice."""
             response = requests.post(
                 LM_STUDIO_URL,
                 json={
-                    "model": "meta-llama-3.1-8b-instruct",
+                    "model": "llama-2-7b-chat",
                     "messages": messages,
                     "temperature": 0.7,
-                    "max_tokens": 500,
+                    "max_tokens": 300,
                     "stream": False
                 },
-                timeout=60
+                timeout=120
             )
             response.raise_for_status()
             result = response.json()
@@ -2526,7 +2696,7 @@ Use this live data to give specific, actionable advice."""
             return jsonify({
                 "success": True,
                 "response": assistant_message,
-                "model": "meta-llama-3.1-8b-instruct"
+                "model": "llama-2-7b-chat"
             })
             
         except requests.exceptions.ConnectionError:

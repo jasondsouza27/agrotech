@@ -49,7 +49,7 @@
        try {
          setLoading(true);
          const params = district ? `?district=${encodeURIComponent(district)}` : "";
-         const res = await fetch(`http://127.0.0.1:5000/api/weather${params}`);
+         const res = await fetch(`/api/weather${params}`);
          const data = await res.json();
          if (data.success) {
            setWeather(data);
